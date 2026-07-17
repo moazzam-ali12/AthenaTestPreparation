@@ -1,0 +1,193 @@
+ACT AI Tutor Platform
+Project Overview & Developer Handover Document
+Prepared for: Moazzam  |  Date: June 2026
+Confidential — Do Not Distribute
+1. What Is This Project?
+This is an AI-powered ACT exam preparation platform. It works like a personal tutor app that students use daily to practice ACT questions, get AI explanations for wrong answers, and track their progress toward a target ACT score — all behind a monthly or annual subscription.
+The platform includes four key experiences:
+A student signs up, pays via Stripe, and takes a diagnostic test to establish their starting ACT score.
+Every day, the app generates a personalized “quest” — a set of 20 practice questions tailored to their weaknesses.
+An AI tutor explains mistakes in real time on an interactive whiteboard/canvas.
+As the student improves, questions automatically get harder. Streaks, XP, and badges keep them motivated.
+2. Project At a Glance
+Field
+Detail
+Target Exam
+ACT (not SAT — full content swap required)
+Build Status
+~35% complete
+Deadline
+3 weeks from start
+Budget
+$500
+Delivery Requirement
+Fully tested, live, taking real payments
+3. Tech Stack
+Layer
+Technology
+Framework
+Next.js 15 (App Router, TypeScript)
+Authentication
+Clerk (Google login + email)
+Database
+Supabase (PostgreSQL)
+ORM
+Drizzle (no DrizzleKit — manual schema)
+UI Components
+Tailwind CSS 4 + shadcn/ui
+Animations
+Framer Motion
+AI Agent Backend
+Agno (Python / FastAPI)
+Payments
+Stripe
+4. What Is Already Built
+The following pieces exist and are NOT your responsibility to rebuild from scratch.
+4.1 AI Tutor Canvas (Done by another developer)
+This is the hardest and most complex part of the platform. It is already live and working at athena.sset.dev. It includes:
+Interactive whiteboard/canvas for scratch work
+Question display with multiple choice answers
+AI chat at the bottom that explains each question
+Hint mode, guided solution mode, and full explanation mode
+Wrong answer analysis
+The AI backend built in Python/FastAPI using Agno
+Important: Do not modify or rebuild this. Your job is to integrate it into the web app.
+4.2 Frontend Design Shell (Lovable.app)
+A visual design for the entire app exists at athena-sat-webapp.lovable.app. Screens have been designed but the backend is not connected. Think of it as a beautiful car with no engine. This includes:
+Landing/marketing page
+Onboarding screens
+Home dashboard mockup
+Daily quest card design
+Progress, Profile, and Mentor screen designs
+4.3 Partial Backend (Claude Code version)
+A second codebase built in Claude Code has some backend logic started — partial database structure and some API routes. This is your starting base. Download it from the Google Drive folder provided by the client.
+5. Your Tasks (What You Need to Build)
+Task 1 — Switch Everything from SAT to ACT
+The entire platform was built for SAT. You must change all content, scoring, and subjects to ACT.
+Change subjects: English (75 Qs), Math (60 Qs), Reading (40 Qs), Science (40 Qs)
+Change scoring: ACT scores 1–36 composite (not 400–1600)
+Replace all SAT question taxonomy with ACT taxonomy
+Change all text labels, branding, and copy from SAT to ACT
+Create a new actTopics.ts file listing all ACT subjects and subtopics
+Task 2 — Build the Database
+Create all Supabase tables using Drizzle ORM. Key tables needed:
+users — id, email, name, target_score, current_score, streak, xp
+questions — id, subject, topic, subtopic, difficulty, question_text, options, correct_answer, explanation
+quests — id, user_id, date, questions_list, completed, score
+skill_mastery — id, user_id, topic, mastery_level, accuracy, total_attempts
+subscriptions — id, user_id, stripe_customer_id, plan, status, trial_end
+Task 3 — Connect Login and Signup (Clerk)
+Set up Clerk project and add API keys to .env
+Wrap layout with ClerkProvider
+Add sign-in and sign-up pages using Clerk components
+Protect all authenticated routes using auth()
+Auto-create user row in database on first signup
+Task 4 — Seed the Question Bank
+Write or AI-generate 20–30 practice questions per ACT topic
+Each question needs: question text, 4 options, correct answer, difficulty (1–10), explanation
+Write a script to bulk-insert questions into Supabase
+Task 5 — Build the Daily Quest System
+Create API route: /api/quest/generate
+If today's quest exists for this user, return it
+If not, pick 20 questions: 60% weakest topics, 30% mid-level, 10% stretch
+Save the quest to the quests table
+Return questions to the frontend
+Task 6 — Build Score Tracking
+Create API route: /api/quest/complete
+Receive student answers after quest completion
+Calculate correct answers per ACT section
+Convert to 1–36 scale using ACT score tables
+Calculate composite score (average of four sections)
+Update skill mastery levels in database
+Save score history for progress charts
+Task 7 — Set Up Stripe Payments
+Create Stripe products: Monthly Plan and Annual Plan
+Build checkout page with Stripe Checkout Session
+Build webhook endpoint: /api/stripe/webhook
+On payment success: activate subscription in database
+On payment failure: mark subscription inactive, lock access
+On cancellation: update subscription status
+Add middleware to gate premium features
+Build billing portal for users to manage their subscription
+Task 8 — Build Notifications
+Use Resend (email) for daily reminders, streak alerts, weekly summaries
+Use OneSignal or web push for browser notifications
+Set up daily cron job to send reminders at each user’s scheduled study time
+Build missed session detection and practice lock/reset flow
+Task 9 — Build Gamification
+XP system: Easy correct = +10 XP, Medium = +20 XP, Hard = +30 XP
+Streak system: Complete a quest daily to increment; miss a day to reset
+Tier system by ACT score: Bronze (1–15), Silver (16–20), Gold (21–25), Platinum (26–30), Diamond (31–36)
+Achievement badges for milestones
+Level-up and score milestone animations using Framer Motion
+Task 10 — Connect UI to Real Data
+Home dashboard: wire real score, streak, and today’s quest
+Progress screen: fetch score history, display with Recharts
+Profile screen: wire real XP, badges, and study time
+Mentor screen: wire real study calendar and schedule
+Match all screens pixel-perfectly to the provided design mockups
+Task 11 — Integrate the Canvas
+Import the AI tutor canvas as a component
+When student starts daily quest, open canvas with their questions
+When quest finishes, send results back to /api/quest/complete
+Task 12 — Testing
+Test full signup → payment → quest → score update flow end to end
+Use Stripe test card numbers to simulate payments
+Verify score math is correct across all four ACT sections
+Test adaptive difficulty: questions get harder as student improves
+Test notifications send at correct times
+Test on mobile and desktop
+Write automated end-to-end test suite before delivery
+6. Week-by-Week Plan
+Week
+Tasks
+Week 1
+Set up environment, switch SAT to ACT, build Supabase schema, set up Clerk auth, seed question bank, get onboarding and diagnostic working
+Week 2
+Build daily quest API, adaptive difficulty engine, score tracking, Stripe payments, gamification system, integrate canvas from other developer
+Week 3
+Build notifications, complete all UI screens with real data, write tests, fix bugs, do early user testing with 10–20 students, final QA and handoff
+7. ACT Subjects Reference
+English (75 questions)
+Production of Writing: Topic development, organization, unity and cohesion
+Knowledge of Language: Word choice, style, tone, conciseness
+Conventions of Standard English: Sentence structure, grammar, punctuation
+Math (60 questions)
+Pre-Algebra & Elementary Algebra
+Intermediate Algebra & Coordinate Geometry
+Plane Geometry
+Trigonometry
+Reading (40 questions)
+Literary Narrative / Prose Fiction
+Social Science
+Humanities
+Natural Science
+Science (40 questions)
+Data Representation (graphs, tables, figures)
+Research Summaries (experiments)
+Conflicting Viewpoints
+8. Things to Confirm with Client Before Starting
+Before writing any code, confirm these five things with the client:
+#
+Question
+Why It Matters
+1
+Access to codebase (Google Drive folder)
+You need the existing code to build on top of it
+2
+Canvas dev integration timeline
+You need to know when their code will be ready to merge
+3
+ACT question bank source
+Are questions pre-written or do you generate them with AI?
+4
+Stripe account access
+Will client provide Stripe keys or do you create a new account?
+5
+Gmail account for all new service signups
+Client asked you to create one and share credentials
+9. Summary
+In simple words, here is what this project is:
+The design already exists. The AI tutor already works. Your job is to build everything in between — the database, the business logic, the payments, the notifications, and connect it all together into one working product that real students can pay for and use to prepare for the ACT.
+The two codebases (the canvas and the web app) are separate but need to be integrated into one final product. The client expects a fully tested, fully working, payment-enabled platform by the end of week 3 — no halfway builds.
+— End of Document —
