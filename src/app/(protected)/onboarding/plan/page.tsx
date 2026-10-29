@@ -179,26 +179,28 @@ export default function OnboardingPlanPage() {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden">
-      {/* Video backgrounds */}
-      {videoSources.map((src, i) => (
-        <video
-          key={i}
-          src={src}
-          className="absolute inset-0 h-full w-full object-cover transition-opacity duration-600"
-          style={{ opacity: i === step ? 1 : 0, zIndex: i === step ? 1 : 0 }}
-          autoPlay
-          loop
-          muted
-          playsInline
-        />
-      ))}
+    <div className="fixed inset-0 z-50 overflow-x-hidden overflow-y-auto overscroll-contain">
+      {/* Video backgrounds (pinned to the viewport while content scrolls) */}
+      <div className="pointer-events-none fixed inset-0">
+        {videoSources.map((src, i) => (
+          <video
+            key={i}
+            src={src}
+            className="absolute inset-0 h-full w-full object-cover transition-opacity duration-600"
+            style={{ opacity: i === step ? 1 : 0, zIndex: i === step ? 1 : 0 }}
+            autoPlay
+            loop
+            muted
+            playsInline
+          />
+        ))}
 
-      {/* Dark overlay */}
-      <div className="absolute inset-0 z-10 bg-black/60" />
+        {/* Dark overlay for text legibility over the video */}
+        <div className="absolute inset-0 z-10 bg-black/60" />
+      </div>
 
-      {/* Content */}
-      <div className="relative z-20 flex w-full max-w-lg flex-col items-center px-6 text-center">
+      {/* Content: centered when it fits, grows and scrolls from the top when it doesn't */}
+      <div className="relative z-20 mx-auto flex min-h-[100dvh] w-full max-w-lg flex-col items-center justify-center px-6 py-10 text-center">
         <AnimatePresence mode="wait">
           <motion.div
             key={step}
@@ -283,7 +285,7 @@ export default function OnboardingPlanPage() {
                     <motion.div
                       initial={{ opacity: 0, y: -5 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="absolute left-0 right-0 top-full z-50 mt-2 overflow-hidden rounded-xl border border-white/15 bg-black/80 backdrop-blur-2xl"
+                      className="mt-2 max-h-[min(24rem,60dvh)] overflow-y-auto overscroll-contain rounded-xl border border-white/15 bg-black/80 backdrop-blur-2xl"
                     >
                       {LEARNER_TYPES.map((type) => {
                         const selected = data.learnerTypes.includes(type.label);
