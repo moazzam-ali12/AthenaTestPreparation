@@ -24,5 +24,18 @@ export const clerkLocalization: Localization = {
     form_password_size_in_bytes_exceeded: "That password is too long. Please use a shorter one.",
     form_password_incorrect: "Incorrect password. Please try again.",
     form_password_or_identifier_incorrect: "Email or password is incorrect.",
+    // Strength-meter text shown under the password field.
+    zxcvbn: {
+      notEnough: "This password is weak.",
+      couldBeStronger: "This password is okay, but could be stronger.",
+      goodPassword: "Strong password.",
+      suggestions: {
+        anotherWord: "Try mixing uppercase, lowercase, numbers, and special characters.",
+        useWords: "Try mixing uppercase, lowercase, numbers, and special characters.",
+        sequences: "Avoid simple sequences like 123 or abc.",
+        repeated: "Avoid repeated characters.",
+        pwned: "This password has appeared in a data breach. Please choose a different one.",
+      },
+    },
   },
 };
