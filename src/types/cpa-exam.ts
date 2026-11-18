@@ -9,6 +9,16 @@ export type CpaSection = "AUD" | "FAR" | "REG" | "BAR" | "ISC" | "TCP";
  */
 export const MY_LEARNING_PRACTICE_SUBJECT = "aud";
 
+/** Lowercase section code, as stored in `topics.subject`. */
+export type CpaSubject = Lowercase<CpaSection>;
+
+export function isCpaSubject(value: unknown): value is CpaSubject {
+  return (
+    typeof value === "string" &&
+    ["aud", "far", "reg", "bar", "isc", "tcp"].includes(value)
+  );
+}
+
 export const CPA_CORE_SECTIONS: CpaSection[] = ["AUD", "FAR", "REG"];
 export const CPA_DISCIPLINE_SECTIONS: CpaSection[] = ["BAR", "ISC", "TCP"];
 
@@ -42,7 +52,10 @@ export type CpaSectionExamAttempt = {
   status: CpaSectionExamAttemptStatus;
   rawScore: number | null;
   scaledScore: number | null;
+  /** Null for sample tests — they never pass or fail. */
   passed: boolean | null;
+  /** Free-trial sample test: short timer, never affects pass status. */
+  isSample: boolean;
   totalTimeSeconds: number;
   currentModule: number;
   currentQuestion: number;
@@ -102,14 +115,66 @@ export type CpaExamStartResponse = {
   test: CpaSectionExam;
   problems: CpaSectionExamProblem[];
   answers: CpaSectionExamAnswer[];
+  isSample: boolean;
+  /** Time limit for this attempt; the client timer reads this. */
+  durationMinutes: number;
 };
 
 export type CpaExamSubmitResponse = {
   section: CpaSection;
   rawScore: number;
   scaledScore: number;
+  /** Always false for sample tests (they don't pass/fail). */
   passed: boolean;
+  isSample: boolean;
+  /** New overall level if this exam completed every section at level 10. */
+  overallLevelUp?: number | null;
 };
+
+/** GET /api/practice-exam/attempts/[id] — loads one attempt by ID (refresh-safe). */
+export type CpaExamAttemptResponse = {
+  attempt: CpaSectionExamAttempt;
+  test: CpaSectionExam;
+  /** Answer keys/explanations are stripped while the attempt is in progress. */
+  problems: CpaSectionExamProblem[];
+  /** `isCorrect` is null while the attempt is in progress. */
+  answers: CpaSectionExamAnswer[];
+  isSample: boolean;
+  durationMinutes: number;
+  startedAt: string;
+  submittedAt: string | null;
+  /** Seconds since `startedAt`, capped at the time limit (drives the resumed timer). */
+  elapsedSeconds: number;
+  scaledScore: number | null;
+  rawScore: number | null;
+  total: number;
+  /** Null for sample tests and unfinished attempts. */
+  passed: boolean | null;
+};
+
+/** One question of a submitted attempt, in exam order (GET /api/practice-exam/attempts/[id]/review). */
+export type CpaExamReviewQuestion = {
+  id: string;
+  number: number;
+  stem: string;
+  options: string[];
+  /** Null if the question was skipped. */
+  userAnswer: number | null;
+  correctAnswer: number;
+  isCorrect: boolean;
+  explanation: string;
+  solutionSteps: { step: number; instruction: string; math?: string }[];
+  subtopicName: string | null;
+  difficulty: string;
+};
+
+export type CpaExamReviewResponse = {
+  attemptId: string;
+  questions: CpaExamReviewQuestion[];
+};
+
+/** 403 body when a review is requested before the attempt is submitted. */
+export const ATTEMPT_NOT_SUBMITTED = "ATTEMPT_NOT_SUBMITTED";
 
 export type CpaExamHistoryResponse = {
   attempts: CpaSectionExamAttempt[];

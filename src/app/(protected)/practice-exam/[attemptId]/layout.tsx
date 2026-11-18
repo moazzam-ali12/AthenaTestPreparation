@@ -1,22 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { toast } from "sonner";
+import { useEffect } from "react";
+import Link from "next/link";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import { CpaExamProvider } from "@/components/cpa-exam/cpa-exam-provider";
-import type {
-  CpaSectionExamProblem,
-  CpaSectionExamAnswer,
-  CpaSectionExamAttempt,
-  CpaSectionExam,
-} from "@/types/cpa-exam";
-
-type LoadedData = {
-  attempt: CpaSectionExamAttempt;
-  test: CpaSectionExam;
-  problems: CpaSectionExamProblem[];
-  answers: CpaSectionExamAnswer[];
-};
+import { useCpaExamAttempt } from "@/hooks/use-cpa-exam";
 
 export default function CpaExamAttemptLayout({
   children,
@@ -24,63 +12,24 @@ export default function CpaExamAttemptLayout({
   children: React.ReactNode;
 }) {
   const params = useParams<{ attemptId: string }>();
+  const pathname = usePathname();
   const router = useRouter();
-  const [data, setData] = useState<LoadedData | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Loads the attempt by ID — a refresh resumes the same attempt and never re-runs /start.
+  const { data, isLoading, isError, isFetching } = useCpaExamAttempt(params.attemptId);
 
+  const resultsPath = `/practice-exam/${params.attemptId}/results`;
+  const onResults = pathname === resultsPath;
+  const status = data?.attempt.status;
+
+  // Submitted → results; unfinished → back into the exam. Skip while refetching
+  // (e.g. right after submit) so stale data doesn't bounce the user.
   useEffect(() => {
-    async function load() {
-      try {
-        // Find the attempt (and its section) from the user's history.
-        const historyRes = await fetch("/api/practice-exam/history");
-        if (!historyRes.ok) {
-          router.push("/practice-exam");
-          return;
-        }
-        const historyJson = await historyRes.json();
-        const attemptSummary = (historyJson.attempts ?? []).find(
-          (a: CpaSectionExamAttempt) => a.id === params.attemptId
-        );
+    if (isFetching || !status) return;
+    if (status === "completed" && !onResults) router.replace(resultsPath);
+    else if (status === "in_progress" && onResults) router.replace(`/practice-exam/${params.attemptId}`);
+  }, [isFetching, status, onResults, resultsPath, params.attemptId, router]);
 
-        if (!attemptSummary) {
-          router.push("/practice-exam");
-          return;
-        }
-
-        // Resuming: /start returns the existing in-progress attempt for the section.
-        const res = await fetch("/api/practice-exam/start", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ section: attemptSummary.section }),
-        });
-
-        if (!res.ok) {
-          router.push("/practice-exam");
-          return;
-        }
-
-        const json = await res.json();
-        setData({
-          attempt: {
-            ...attemptSummary,
-            id: json.attemptId,
-            testId: json.test.id,
-          },
-          test: json.test,
-          problems: json.problems,
-          answers: json.answers,
-        });
-      } catch {
-        toast.error("Failed to load exam");
-        router.push("/practice-exam");
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, [params.attemptId, router]);
-
-  if (loading || !data) {
+  if (isLoading) {
     return (
       <div className="flex items-center justify-center h-screen">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-muted border-t-primary" />
@@ -88,12 +37,27 @@ export default function CpaExamAttemptLayout({
     );
   }
 
+  if (!data) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen gap-4">
+        <p className="text-muted-foreground">
+          {isError ? "Couldn't load this exam." : "Result not found."}
+        </p>
+        <Link href="/practice-exam" className="text-sm font-medium text-primary hover:underline">
+          Back to Practice Exams
+        </Link>
+      </div>
+    );
+  }
+
   return (
     <CpaExamProvider
-      attempt={data.attempt}
+      // Elapsed time is measured from started_at, so the timer continues across refreshes.
+      attempt={{ ...data.attempt, totalTimeSeconds: data.elapsedSeconds }}
       test={data.test}
       problems={data.problems}
       initialAnswers={data.answers}
+      durationMinutes={data.durationMinutes}
     >
       {children}
     </CpaExamProvider>

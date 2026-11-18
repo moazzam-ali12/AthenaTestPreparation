@@ -1,7 +1,7 @@
 import { auth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import { getUserByClerkId } from "@/lib/db/queries/users";
-import { getCustomTopicWithQuestions } from "@/lib/db/queries/custom-learning";
+import { getCustomTopicWithQuestions, redactCustomQuestion } from "@/lib/db/queries/custom-learning";
 
 export async function GET(
   _req: Request,
@@ -24,5 +24,6 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  return NextResponse.json(result);
+  // No answers before answering: POST /api/my-learning/quiz/answer reveals them per question.
+  return NextResponse.json({ topic: result.topic, questions: result.questions.map(redactCustomQuestion) });
 }

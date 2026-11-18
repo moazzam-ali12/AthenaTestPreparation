@@ -4,7 +4,9 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, ChevronDown, Check } from "lucide-react";
+import { toast } from "sonner";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { CANDIDATE_STAGES } from "@/lib/candidate-stage";
 
 const videoSources = [
   "/videos/bg-video1.mp4",
@@ -21,17 +23,6 @@ const LEARNER_TYPES = [
   { emoji: "\u{1F938}", label: "Kinesthetic", desc: "I learn by doing & practicing" },
   { emoji: "\u{1F465}", label: "Social Learner", desc: "I thrive in group settings" },
   { emoji: "\u{1F9D8}", label: "Solitary Learner", desc: "I focus best studying alone" },
-];
-
-const GRADE_OPTIONS = [
-  "8th Grade",
-  "9th Grade",
-  "10th Grade",
-  "11th Grade",
-  "12th Grade",
-  "College Freshman",
-  "College Sophomore",
-  "Other",
 ];
 
 const DISCIPLINE_SECTIONS: { code: "BAR" | "ISC" | "TCP"; name: string; desc: string }[] = [
@@ -138,6 +129,7 @@ export default function OnboardingPlanPage() {
       if (!res.ok) throw new Error("Failed");
       router.push("/onboarding/quiz");
     } catch {
+      toast.error("Couldn't save your plan. Please try again.");
       setSubmitting(false);
     }
   };
@@ -237,20 +229,20 @@ export default function OnboardingPlanPage() {
                 <h1 className="mb-2 text-3xl font-bold text-white sm:text-4xl">
                   Where Are You?
                 </h1>
-                <p className="mb-1 text-white/70">Your grade helps us tailor the journey perfectly.</p>
+                <p className="mb-1 text-white/70">Your stage in the CPA journey helps us tailor your plan.</p>
                 <p className="mb-8 font-semibold text-white">Pick the one that fits.</p>
                 <div className="flex flex-wrap justify-center gap-3">
-                  {GRADE_OPTIONS.map((g) => (
+                  {CANDIDATE_STAGES.map((s) => (
                     <button
-                      key={g}
+                      key={s.value}
                       className={`rounded-xl border px-5 py-3 text-sm font-medium transition-all ${
-                        data.grade === g
+                        data.grade === s.value
                           ? "border-white/40 bg-white/20 text-white"
                           : "border-white/15 bg-black/40 text-white/70 hover:border-white/25 hover:bg-black/50"
                       }`}
-                      onClick={() => setData({ ...data, grade: g })}
+                      onClick={() => setData({ ...data, grade: s.value })}
                     >
-                      {g}
+                      {s.label}
                     </button>
                   ))}
                 </div>
@@ -368,12 +360,12 @@ export default function OnboardingPlanPage() {
                   What Topic Is Tough?
                 </h1>
                 <p className="mb-1 text-white/70">
-                  Tell us what subject or concept you&apos;re struggling with. We&apos;ll build your path around it.
+                  Tell us which CPA topic or concept you&apos;re struggling with. We&apos;ll build your path around it.
                 </p>
                 <p className="mb-8 font-semibold text-white">Don&apos;t worry, everyone has one.</p>
                 <input
                   className="w-full rounded-xl border border-white/15 bg-black/50 px-5 py-4 text-sm text-white placeholder-white/40 outline-none backdrop-blur-xl focus:border-white/30"
-                  placeholder="e.g. Quadratic Equations, Essay Writing..."
+                  placeholder="e.g. Lease Accounting, Audit Sampling, Basis Calculations..."
                   value={data.strugglingTopic}
                   onChange={(e) => setData({ ...data, strugglingTopic: e.target.value })}
                   onKeyDown={(e) => handleKeyDown(e, () => canContinue() && next())}

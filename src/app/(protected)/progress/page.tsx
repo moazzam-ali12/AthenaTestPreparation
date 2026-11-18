@@ -9,14 +9,19 @@ import { useCurrentUser } from "@/hooks/use-current-user";
 import { ProgressHeader } from "@/components/progress/progress-header";
 import { SectionsPassedSummary } from "@/components/progress/composite-score";
 import { ScoreHistory } from "@/components/progress/score-history";
+import { AccuracyTrendChart } from "@/components/progress/accuracy-trend-chart";
 import { StudyStats } from "@/components/progress/study-stats";
 import { TopicMastery } from "@/components/progress/topic-mastery";
 import { CpaSectionSkills } from "@/components/progress/cpa-section-skills";
 import { PracticeTestResults } from "@/components/progress/practice-test-results";
 import { EngagementInsights } from "@/components/progress/engagement-insights";
+import { LearningSummaryCard } from "@/components/progress/learning-summary-card";
 import { AccuracyByDifficultyChart } from "@/components/progress/accuracy-by-difficulty-chart";
 import { SectionPerformanceChart } from "@/components/progress/section-performance-chart";
 import { GoalsCard } from "@/components/progress/goals-card";
+import { TopicTrends } from "@/components/progress/topic-trends";
+import { TbsProgressCard } from "@/components/tbs/tbs-progress-card";
+import type { TbsSectionProgress } from "@/lib/db/queries/tbs";
 import type { CpaSection } from "@/types/cpa-exam";
 
 type SectionData = {
@@ -28,6 +33,7 @@ type SectionData = {
 };
 
 type ProgressData = {
+  tbsProgress?: TbsSectionProgress[];
   user: {
     displayName: string | null;
     avatarUrl: string | null;
@@ -37,6 +43,7 @@ type ProgressData = {
   sectionsPassed: number;
   sectionsTotal: number;
   scoreHistory: { date: string; score: number }[];
+  accuracyOverTime: { date: string; accuracy: number }[];
   accuracyByDifficulty: {
     difficulty: string;
     total: number;
@@ -50,6 +57,16 @@ type ProgressData = {
     total: number;
     correct: number;
     accuracy: number;
+  }[];
+  topicTrends: {
+    name: string;
+    slug: string;
+    subject: string;
+    sessionCount: number;
+    earlierAccuracy: number;
+    latestAccuracy: number;
+    delta: number;
+    direction: "improving" | "declining" | "stable";
   }[];
   recentSessions: {
     id: string;
@@ -81,9 +98,13 @@ type ProgressData = {
   };
   subsectionSkills: {
     sectionCategory: string;
+    level: number;
     totalAttempts: number;
     correctAttempts: number;
   }[];
+  overallLevel: number;
+  relevantSections: CpaSection[];
+  subtopicCounts: Partial<Record<CpaSection, number>>;
 };
 
 const staggerContainer = {
@@ -184,9 +205,18 @@ export default function ProgressPage() {
           />
         </motion.div>
 
-        {/* Score history chart */}
+        {/* Personalized learning summary */}
+        <motion.div variants={staggerItem}>
+          <LearningSummaryCard />
+        </motion.div>
+
+        {/* Score history + accuracy trend charts */}
         <motion.div variants={staggerItem} className="h-72">
           <ScoreHistory data={data.scoreHistory} />
+        </motion.div>
+
+        <motion.div variants={staggerItem} className="h-72">
+          <AccuracyTrendChart data={data.accuracyOverTime} />
         </motion.div>
 
         {/* Study stats + topic mastery */}
@@ -196,6 +226,16 @@ export default function ProgressPage() {
         >
           <StudyStats stats={data.overallStats} />
           <TopicMastery mastery={data.topicMastery} />
+        </motion.div>
+
+        {/* Per-topic accuracy trends over time */}
+        <motion.div variants={staggerItem}>
+          <TopicTrends trends={data.topicTrends} />
+        </motion.div>
+
+        {/* Task-Based Simulations */}
+        <motion.div variants={staggerItem}>
+          <TbsProgressCard progress={data.tbsProgress ?? []} />
         </motion.div>
 
         {/* Engagement insights */}
@@ -223,7 +263,12 @@ export default function ProgressPage() {
 
         {/* CPA Section Skills breakdown */}
         <motion.div variants={staggerItem}>
-          <CpaSectionSkills skills={data.subsectionSkills} />
+          <CpaSectionSkills
+            skills={data.subsectionSkills}
+            overallLevel={data.overallLevel ?? 1}
+            sections={data.relevantSections ?? ["AUD", "FAR", "REG"]}
+            subtopicCounts={data.subtopicCounts ?? {}}
+          />
         </motion.div>
 
         {/* Recent practice sessions */}

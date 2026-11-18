@@ -3,13 +3,61 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useEffect } from "react";
+import { announceOverallLevelUp } from "@/lib/adaptive/announce-level-up";
 import type {
   CpaSection,
   CpaExamStatusResponse,
   CpaExamStartResponse,
   CpaExamSubmitResponse,
   CpaExamHistoryResponse,
+  CpaExamAttemptResponse,
+  CpaExamReviewResponse,
 } from "@/types/cpa-exam";
+
+/** Per-question review of a submitted attempt. Enable only once the attempt is completed. */
+export function useCpaExamReview(attemptId: string, enabled: boolean) {
+  const query = useQuery<CpaExamReviewResponse>({
+    queryKey: ["cpa-exam-review", attemptId],
+    queryFn: async () => {
+      const res = await fetch(`/api/practice-exam/attempts/${encodeURIComponent(attemptId)}/review`);
+      if (!res.ok) throw new Error("Failed to load review");
+      return res.json();
+    },
+    enabled: enabled && !!attemptId,
+    staleTime: Infinity,
+  });
+
+  useEffect(() => {
+    if (query.isError) toast.error("Failed to load answer review");
+  }, [query.isError]);
+
+  return query;
+}
+
+export const cpaExamAttemptKey = (attemptId: string) => ["cpa-exam-attempt", attemptId] as const;
+
+/** One attempt by ID (refresh-safe; never calls /start). `null` = not found / not yours. */
+export function useCpaExamAttempt(attemptId: string) {
+  const query = useQuery<CpaExamAttemptResponse | null>({
+    queryKey: cpaExamAttemptKey(attemptId),
+    queryFn: async () => {
+      const res = await fetch(`/api/practice-exam/attempts/${encodeURIComponent(attemptId)}`);
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error("Failed to load exam");
+      return res.json();
+    },
+    enabled: !!attemptId,
+    // The provider owns live exam state; don't refetch it out from under the timer.
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+
+  useEffect(() => {
+    if (query.isError) toast.error("Failed to load exam");
+  }, [query.isError]);
+
+  return query;
+}
 
 export function useCpaExamStatus(section: CpaSection) {
   const { data, isLoading, isError, refetch } = useQuery<CpaExamStatusResponse>({
@@ -93,11 +141,14 @@ export function useSubmitCpaExam() {
       if (!res.ok) throw new Error("Failed to submit exam");
       return res.json();
     },
-    onSuccess: (data) => {
+    onSuccess: async (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["cpa-exam", data.section] });
       queryClient.invalidateQueries({ queryKey: ["progress"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["user"] });
+      announceOverallLevelUp(data.overallLevelUp);
+      // Awaited so the results page reads the submitted attempt, not the cached in-progress one.
+      await queryClient.invalidateQueries({ queryKey: cpaExamAttemptKey(variables.attemptId) });
     },
     onError: () => {
       toast.error("Failed to submit exam");

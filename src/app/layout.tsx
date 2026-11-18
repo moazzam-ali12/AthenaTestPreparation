@@ -32,6 +32,8 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 5,
+  // Exposes env(safe-area-inset-*) so bottom bars clear the iPhone home indicator.
+  viewportFit: "cover",
 };
 
 export default function RootLayout({

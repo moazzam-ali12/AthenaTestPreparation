@@ -162,6 +162,7 @@ export type Database = {
           current_module: number | null
           current_question: number | null
           id: string
+          is_sample: boolean
           passed: boolean | null
           raw_score: number | null
           scaled_score: number | null
@@ -178,6 +179,7 @@ export type Database = {
           current_module?: number | null
           current_question?: number | null
           id?: string
+          is_sample?: boolean
           passed?: boolean | null
           raw_score?: number | null
           scaled_score?: number | null
@@ -194,6 +196,7 @@ export type Database = {
           current_module?: number | null
           current_question?: number | null
           id?: string
+          is_sample?: boolean
           passed?: boolean | null
           raw_score?: number | null
           scaled_score?: number | null
@@ -1143,6 +1146,24 @@ export type Database = {
           },
         ]
       }
+      stripe_events: {
+        Row: {
+          id: string
+          processed_at: string
+          type: string
+        }
+        Insert: {
+          id: string
+          processed_at?: string
+          type: string
+        }
+        Update: {
+          id?: string
+          processed_at?: string
+          type?: string
+        }
+        Relationships: []
+      }
       subscriptions: {
         Row: {
           cancel_at_period_end: boolean
@@ -1356,6 +1377,146 @@ export type Database = {
           },
         ]
       }
+      tbs_answer_keys: {
+        Row: {
+          answers: Json
+          tbs_id: string
+        }
+        Insert: {
+          answers: Json
+          tbs_id: string
+        }
+        Update: {
+          answers?: Json
+          tbs_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tbs_answer_keys_tbs_id_fkey"
+            columns: ["tbs_id"]
+            isOneToOne: false
+            referencedRelation: "tbs_tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tbs_attempts: {
+        Row: {
+          field_results: Json | null
+          id: string
+          max_score: number | null
+          responses: Json
+          score: number | null
+          started_at: string
+          status: string
+          submitted_at: string | null
+          tbs_id: string
+          time_spent_seconds: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          field_results?: Json | null
+          id?: string
+          max_score?: number | null
+          responses?: Json
+          score?: number | null
+          started_at?: string
+          status?: string
+          submitted_at?: string | null
+          tbs_id: string
+          time_spent_seconds?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          field_results?: Json | null
+          id?: string
+          max_score?: number | null
+          responses?: Json
+          score?: number | null
+          started_at?: string
+          status?: string
+          submitted_at?: string | null
+          tbs_id?: string
+          time_spent_seconds?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tbs_attempts_tbs_id_fkey"
+            columns: ["tbs_id"]
+            isOneToOne: false
+            referencedRelation: "tbs_tasks"
+            referencedColumns: ["id"]
+          },
+        
+          {
+            foreignKeyName: "tbs_attempts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tbs_tasks: {
+        Row: {
+          created_at: string
+          difficulty: string
+          est_minutes: number
+          exhibits: Json
+          explanation: string
+          fields: Json
+          id: string
+          instructions: string
+          is_sample: boolean
+          section: string
+          status: string
+          subtopic_id: string | null
+          title: string
+        }
+        Insert: {
+          created_at?: string
+          difficulty: string
+          est_minutes?: number
+          exhibits?: Json
+          explanation?: string
+          fields?: Json
+          id?: string
+          instructions: string
+          is_sample?: boolean
+          section: string
+          status?: string
+          subtopic_id?: string | null
+          title: string
+        }
+        Update: {
+          created_at?: string
+          difficulty?: string
+          est_minutes?: number
+          exhibits?: Json
+          explanation?: string
+          fields?: Json
+          id?: string
+          instructions?: string
+          is_sample?: boolean
+          section?: string
+          status?: string
+          subtopic_id?: string | null
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tbs_tasks_subtopic_id_fkey"
+            columns: ["subtopic_id"]
+            isOneToOne: false
+            referencedRelation: "subtopics"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       topics: {
         Row: {
           color_scheme: string
@@ -1413,6 +1574,73 @@ export type Database = {
         }
         Relationships: []
       }
+      trial_daily_usage: {
+        Row: {
+          kind: string
+          updated_at: string
+          usage_date: string
+          used: number
+          user_id: string
+        }
+        Insert: {
+          kind: string
+          updated_at?: string
+          usage_date: string
+          used?: number
+          user_id: string
+        }
+        Update: {
+          kind?: string
+          updated_at?: string
+          usage_date?: string
+          used?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trial_daily_usage_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      trial_usage: {
+        Row: {
+          created_at: string
+          id: string
+          item_id: string
+          kind: string
+          section: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          item_id: string
+          kind: string
+          section: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          item_id?: string
+          kind?: string
+          section?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trial_usage_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       user_cpa_section_progress: {
         Row: {
           attempts_count: number
@@ -1466,6 +1694,7 @@ export type Database = {
           struggling_topic: string | null
           theme: string | null
           tutor_character_id: string | null
+          tutor_mode: string | null
           tutor_voice_id: string | null
           updated_at: string
           user_id: string
@@ -1481,6 +1710,7 @@ export type Database = {
           struggling_topic?: string | null
           theme?: string | null
           tutor_character_id?: string | null
+          tutor_mode?: string | null
           tutor_voice_id?: string | null
           updated_at?: string
           user_id: string
@@ -1496,6 +1726,7 @@ export type Database = {
           struggling_topic?: string | null
           theme?: string | null
           tutor_character_id?: string | null
+          tutor_mode?: string | null
           tutor_voice_id?: string | null
           updated_at?: string
           user_id?: string
@@ -1526,12 +1757,17 @@ export type Database = {
           skill_score: number | null
           stripe_customer_id: string | null
           subscription_end_date: string | null
+          payment_failed_at: string | null
+          payment_reminder_sent_at: string | null
+          billing_plan: string | null
           subscription_status: string
           target_discipline_section:
             | Database["public"]["Enums"]["cpa_section"]
             | null
           timezone: string
           total_xp: number
+          trial_ends_at: string | null
+          trial_started_at: string | null
           updated_at: string
         }
         Insert: {
@@ -1549,12 +1785,17 @@ export type Database = {
           skill_score?: number | null
           stripe_customer_id?: string | null
           subscription_end_date?: string | null
+          payment_failed_at?: string | null
+          payment_reminder_sent_at?: string | null
+          billing_plan?: string | null
           subscription_status?: string
           target_discipline_section?:
             | Database["public"]["Enums"]["cpa_section"]
             | null
           timezone?: string
           total_xp?: number
+          trial_ends_at?: string | null
+          trial_started_at?: string | null
           updated_at?: string
         }
         Update: {
@@ -1572,12 +1813,17 @@ export type Database = {
           skill_score?: number | null
           stripe_customer_id?: string | null
           subscription_end_date?: string | null
+          payment_failed_at?: string | null
+          payment_reminder_sent_at?: string | null
+          billing_plan?: string | null
           subscription_status?: string
           target_discipline_section?:
             | Database["public"]["Enums"]["cpa_section"]
             | null
           timezone?: string
           total_xp?: number
+          trial_ends_at?: string | null
+          trial_started_at?: string | null
           updated_at?: string
         }
         Relationships: []
@@ -1587,7 +1833,40 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      consume_trial_item: {
+        Args: {
+          p_item_id: string
+          p_kind: string
+          p_max: number
+          p_section: string
+          p_user_id: string
+        }
+        Returns: {
+          allowed: boolean
+          already_consumed: boolean
+          remaining: number
+        }[]
+      }
+      consume_trial_daily: {
+        Args: {
+          p_kind: string
+          p_max: number
+          p_user_id: string
+        }
+        Returns: {
+          allowed: boolean
+          remaining: number
+          usage_day: string
+        }[]
+      }
+      refund_trial_daily: {
+        Args: {
+          p_day: string
+          p_kind: string
+          p_user_id: string
+        }
+        Returns: undefined
+      }
     }
     Enums: {
       cpa_section: "AUD" | "FAR" | "REG" | "BAR" | "ISC" | "TCP"

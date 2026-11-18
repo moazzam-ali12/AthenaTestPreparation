@@ -2,6 +2,8 @@ import { auth } from "@clerk/nextjs/server";
 import { getUserByClerkId } from "@/lib/db/queries/users";
 import { supabase } from "@/lib/supabase/client";
 import { NextResponse } from "next/server";
+import { getStreakFreezes } from "@/lib/db/queries/streak-freezes";
+import { isFrozen } from "@/lib/streak";
 
 // GET — check if user is blocked (has missed quest needing reset)
 export async function GET() {
@@ -14,13 +16,18 @@ export async function GET() {
   // Mark any unresolved missed quests (quest_date < today, status != completed, not already marked)
   const today = new Date().toISOString().split("T")[0];
 
-  const { data: missedQuests } = await supabase
-    .from("daily_quests")
-    .select("id, quest_date, status, reset_required, reset_completed_at")
-    .eq("user_id", user.id)
-    .lt("quest_date", today)
-    .neq("status", "completed")
-    .is("reset_completed_at", null);
+  const [{ data: allMissed }, freezes] = await Promise.all([
+    supabase
+      .from("daily_quests")
+      .select("id, quest_date, status, reset_required, reset_completed_at")
+      .eq("user_id", user.id)
+      .lt("quest_date", today)
+      .neq("status", "completed")
+      .is("reset_completed_at", null),
+    getStreakFreezes(user.id),
+  ]);
+  // Days the user was locked out (trial ended / subscription lapsed) are not "missed".
+  const missedQuests = (allMissed ?? []).filter((q) => !isFrozen(q.quest_date, freezes));
 
   let isBlocked = false;
   let missedQuestId: string | null = null;

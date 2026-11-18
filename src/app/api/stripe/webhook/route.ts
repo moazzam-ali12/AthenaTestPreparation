@@ -2,56 +2,189 @@ import { stripe } from "@/lib/stripe";
 import { updateUser } from "@/lib/db/queries/users";
 import { upsertSubscription } from "@/lib/db/queries/subscriptions";
 import { supabase } from "@/lib/supabase/client";
+import { GRACE_PERIOD_DAYS, getCpaPriceIds, planForPriceId } from "@/lib/plans";
+import { getAccess, getGraceEndsAt, hasProAccess } from "@/lib/subscription";
+import { sendEmail } from "@/lib/email/send";
+import { paymentFailedHtml } from "@/lib/email/templates";
+import { currentLockedGap, recordStreakFreeze } from "@/lib/db/queries/streak-freezes";
 import { clerkClient } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
+import { track } from "@/lib/analytics";
 import type Stripe from "stripe";
 
 // Required: disable body parsing so we can verify the raw signature
 export const runtime = "nodejs";
 
+// Lower rank wins when a customer has several subscriptions.
+const STATUS_RANK: Record<string, number> = {
+  active: 0,
+  trialing: 1,
+  past_due: 2,
+  unpaid: 3,
+  incomplete: 4,
+  paused: 5,
+  canceled: 6,
+  incomplete_expired: 7,
+};
+
 async function getUserByStripeCustomerId(stripeCustomerId: string) {
   const { data } = await supabase
     .from("users")
-    .select("*")
+    .select("id, clerk_id")
     .eq("stripe_customer_id", stripeCustomerId)
     .maybeSingle();
   return data ?? null;
 }
 
-async function syncSubscriptionToUser(
-  sub: Stripe.Subscription,
-  userId: string,
-  clerkId: string
-) {
-  const status = sub.status; // active, canceled, past_due, etc.
-  const isActive = status === "active" || status === "trialing";
-  const planType = isActive ? "pro" : "free";
+function toDate(seconds: number | undefined) {
+  return seconds ? new Date(seconds * 1000) : null;
+}
+
+type PrevUserRow = {
+  email: string | null;
+  display_name: string | null;
+  subscription_status: string | null;
+  trial_ends_at: string | null;
+  created_at: string | null;
+  subscription_end_date: string | null;
+  payment_failed_at: string | null;
+};
+
+/**
+ * Records the days a user was locked out as a streak freeze, when they move from
+ * expired back to Pro. Runs before the user row is updated, so it still sees the
+ * previous (locked) state; later events for an already-Pro user (including one in
+ * the failed-payment grace period) are no-ops.
+ * Non-fatal: a failure only costs the streak, never the subscription sync.
+ */
+async function freezeLockedGap(userId: string, prev: PrevUserRow) {
+  try {
+    const prevAccess = {
+      subscriptionStatus: prev.subscription_status,
+      trialEndsAt: prev.trial_ends_at,
+      createdAt: prev.created_at,
+      paymentFailedAt: prev.payment_failed_at,
+    };
+    const access = getAccess(prevAccess);
+    if (access.tier !== "expired") return;
+
+    const gap = currentLockedGap({
+      trialEndsAt: access.trialEndsAt,
+      subscriptionEndDate: prev.subscription_end_date,
+      graceEndsAt: getGraceEndsAt(prevAccess),
+    });
+    if (gap) await recordStreakFreeze(userId, gap);
+  } catch (err) {
+    console.error("Streak freeze failed (non-fatal):", err);
+  }
+}
+
+/** First-failure notice for the grace period. Non-fatal and never retried by Stripe. */
+async function sendPaymentFailedEmail(prev: PrevUserRow) {
+  if (!prev.email) return;
+  try {
+    const t = paymentFailedHtml({
+      displayName: prev.display_name ?? "there",
+      daysLeft: GRACE_PERIOD_DAYS,
+      reminder: false,
+    });
+    await sendEmail({ to: prev.email, subject: t.subject, html: t.html });
+  } catch (err) {
+    console.error("Payment-failed email failed (non-fatal):", err);
+  }
+}
+
+/**
+ * Recomputes a user's access from every subscription on their Stripe customer,
+ * so out-of-order events or a second subscription can't leave the wrong state.
+ * Only subscriptions on CPA prices count: this Stripe account also sells other
+ * products, and the billing portal can switch a subscription onto them.
+ */
+async function syncCustomer(customerId: string, userId: string, clerkId: string, eventAt: Date) {
+  const cpaPrices = new Set(getCpaPriceIds());
+  if (cpaPrices.size === 0) {
+    throw new Error("No CPA price IDs configured — cannot determine access");
+  }
+
+  const { data: subs } = await stripe.subscriptions.list({
+    customer: customerId,
+    status: "all",
+    limit: 100,
+  });
+  const isCpa = (sub: Stripe.Subscription) =>
+    sub.items.data.some((item) => cpaPrices.has(item.price.id));
+
   // SDK v22: period fields live on items[0], not the subscription root
-  const item = sub.items.data[0];
-  const periodEnd = item?.current_period_end
-    ? new Date(item.current_period_end * 1000)
+  await Promise.all(
+    subs.map((sub) =>
+      upsertSubscription({
+        userId,
+        stripeSubscriptionId: sub.id,
+        stripeCustomerId: customerId,
+        status: sub.status,
+        planType: isCpa(sub) && hasProAccess(sub.status) ? "pro" : "free",
+        currentPeriodStart: toDate(sub.items.data[0]?.current_period_start),
+        currentPeriodEnd: toDate(sub.items.data[0]?.current_period_end),
+        cancelAtPeriodEnd: sub.cancel_at_period_end,
+      })
+    )
+  );
+
+  const best = subs
+    .filter(isCpa)
+    .sort((a, b) => (STATUS_RANK[a.status] ?? 99) - (STATUS_RANK[b.status] ?? 99))[0];
+  const status = best?.status ?? "free";
+  const planType = hasProAccess(status) ? "pro" : "free";
+  const billingPlan = best
+    ? (best.items.data.map((i) => planForPriceId(i.price.id)).find(Boolean) ?? null)
     : null;
 
-  // Run DB writes first — these are critical
-  await Promise.all([
-    updateUser(clerkId, {
-      subscriptionStatus: status,
-      planType,
-      subscriptionEndDate: periodEnd,
-    }),
-    upsertSubscription({
-      userId,
-      stripeSubscriptionId: sub.id,
-      stripeCustomerId: sub.customer as string,
-      status,
-      planType,
-      currentPeriodStart: item?.current_period_start
-        ? new Date(item.current_period_start * 1000)
-        : null,
-      currentPeriodEnd: periodEnd,
-      cancelAtPeriodEnd: sub.cancel_at_period_end,
-    }),
-  ]);
+  const { data: prev } = await supabase
+    .from("users")
+    .select(
+      "email, display_name, subscription_status, trial_ends_at, created_at, subscription_end_date, payment_failed_at"
+    )
+    .eq("id", userId)
+    .maybeSingle();
+
+  const failing = status === "past_due" || status === "unpaid";
+
+  // A locked-out user (trial ended / subscription lapsed / grace ran out) is regaining
+  // access: freeze the locked days so their streak continues instead of resetting.
+  if (planType === "pro" && prev) await freezeLockedGap(userId, prev);
+
+  await updateUser(clerkId, {
+    subscriptionStatus: status,
+    planType,
+    subscriptionEndDate: toDate(best?.items.data[0]?.current_period_end),
+    billingPlan,
+  });
+
+  // Analytics: only on a real transition (webhooks often re-sync the same state).
+  // past_due is the failed-payment grace period, not churn (and recovering from it isn't a new subscribe).
+  const paying = (s: string | null | undefined) => hasProAccess(s) || s === "past_due";
+  const wasPaying = paying(prev?.subscription_status);
+  if (planType === "pro" && !wasPaying) track("subscribed", { status, plan: billingPlan }, userId);
+  if (!paying(status) && wasPaying) track("churned", { status }, userId);
+
+  // Failed-payment spell. payment_failed_at keeps the FIRST failure (it anchors the
+  // grace period, see getAccess); the conditional update makes exactly one event —
+  // even among concurrent ones — start the spell and send the notice.
+  if (failing) {
+    const { data: started } = await supabase
+      .from("users")
+      .update({ payment_failed_at: eventAt.toISOString(), payment_reminder_sent_at: null })
+      .eq("id", userId)
+      .is("payment_failed_at", null)
+      .select("id");
+    if (status === "past_due" && started?.length && prev) await sendPaymentFailedEmail(prev);
+  } else if (prev?.payment_failed_at) {
+    // Paid, canceled or gone: the spell is over.
+    await supabase
+      .from("users")
+      .update({ payment_failed_at: null, payment_reminder_sent_at: null })
+      .eq("id", userId);
+  }
 
   // Sync Clerk JWT separately — a Clerk failure shouldn't fail the webhook
   // (Stripe would retry, causing duplicate DB writes)
@@ -87,48 +220,40 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 
+  // Idempotency: record the event id first. A duplicate delivery (Stripe retries)
+  // hits the primary-key conflict and is acknowledged without reprocessing.
+  const { error: dedupeErr } = await supabase
+    .from("stripe_events")
+    .insert({ id: event.id, type: event.type });
+  if (dedupeErr) {
+    if (dedupeErr.code === "23505") {
+      return NextResponse.json({ received: true, duplicate: true });
+    }
+    // Non-duplicate insert failure: log and continue so we don't drop the event.
+    console.error("Failed to record Stripe event for idempotency:", dedupeErr);
+  }
+
   try {
     switch (event.type) {
-      case "checkout.session.completed": {
-        const session = event.data.object as Stripe.Checkout.Session;
-        if (session.mode !== "subscription") break;
+      case "checkout.session.completed":
+      case "customer.subscription.created":
+      case "customer.subscription.updated":
+      case "customer.subscription.deleted":
+      case "invoice.payment_failed":
+      case "invoice.paid": {
+        const obj = event.data.object as {
+          mode?: string;
+          customer?: string | { id: string } | null;
+        };
+        if (event.type === "checkout.session.completed" && obj.mode !== "subscription") break;
+        if (!obj.customer) break;
+        const customerId = typeof obj.customer === "string" ? obj.customer : obj.customer.id;
 
-        const clerkId = session.metadata?.clerkId;
-        const userId = session.metadata?.userId;
-        if (!clerkId || !userId) break;
-
-        const sub = await stripe.subscriptions.retrieve(
-          session.subscription as string
-        );
-        await syncSubscriptionToUser(sub, userId, clerkId);
-        break;
-      }
-
-      case "customer.subscription.updated": {
-        const sub = event.data.object as Stripe.Subscription;
-        const userRow = await getUserByStripeCustomerId(sub.customer as string);
+        // Resolve the user from the customer id this app stored at checkout, never
+        // from metadata: the shared Stripe account also delivers other apps' events.
+        const userRow = await getUserByStripeCustomerId(customerId);
         if (!userRow) break;
-        await syncSubscriptionToUser(sub, userRow.id, userRow.clerk_id);
-        break;
-      }
-
-      case "customer.subscription.deleted": {
-        const sub = event.data.object as Stripe.Subscription;
-        const userRow = await getUserByStripeCustomerId(sub.customer as string);
-        if (!userRow) break;
-        await syncSubscriptionToUser(sub, userRow.id, userRow.clerk_id);
-        break;
-      }
-
-      case "invoice.payment_failed": {
-        const invoice = event.data.object as Stripe.Invoice;
-        const rawSub = (invoice as any).subscription as string | Stripe.Subscription | null;
-        const subId = typeof rawSub === "string" ? rawSub : (rawSub?.id ?? null);
-        if (!subId) break;
-        const sub = await stripe.subscriptions.retrieve(subId);
-        const userRow = await getUserByStripeCustomerId(sub.customer as string);
-        if (!userRow) break;
-        await syncSubscriptionToUser(sub, userRow.id, userRow.clerk_id);
+        await syncCustomer(customerId, userRow.id, userRow.clerk_id, new Date(event.created * 1000));
         break;
       }
 
@@ -137,6 +262,8 @@ export async function POST(req: Request) {
     }
   } catch (err) {
     console.error(`Error handling Stripe event ${event.type}:`, err);
+    // Un-record the event so Stripe's retry is processed instead of skipped as a duplicate.
+    await supabase.from("stripe_events").delete().eq("id", event.id);
     return NextResponse.json({ error: "Handler failed" }, { status: 500 });
   }
 

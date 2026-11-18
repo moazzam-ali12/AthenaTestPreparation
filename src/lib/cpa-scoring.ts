@@ -15,6 +15,15 @@ export const CPA_PASSING_SCORE = 75;
 /** Minimum accuracy (0-1) on a subtopic quiz to count as "passed"/"mastered." */
 export const SUBTOPIC_PASS_THRESHOLD = 0.7;
 
+/**
+ * Curriculum unlock chain (all tiers). true = the original single study path
+ * AUD → FAR → REG → target discipline, where a section opens only after every
+ * subtopic of the previous one is passed and non-target disciplines never
+ * open. false = each of the 6 sections has its own chain (first subtopic open,
+ * same order within the section), so every section is usable.
+ */
+export const CROSS_SECTION_LOCK = false;
+
 /** Scale a raw correct-count to a 0-99 score given the total question count. */
 export function scaleScore(rawCorrect: number, totalQuestions: number): number {
   if (totalQuestions <= 0) return 0;

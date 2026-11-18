@@ -19,6 +19,7 @@ from app.utils.db import (
 from app.pre_generation.topic_generator import generate_topic
 from app.pre_generation.subtopic_generator import generate_subtopic
 from app.pre_generation.problem_generator import generate_problems_batch, BATCH_SIZE
+from app.pre_generation.problem_quality import DIFFICULTY_LEVELS
 
 # Content maps ported from src/lib/cpaTopics.ts — one per CPA Exam section.
 # Core sections (required for all candidates): AUD, FAR, REG
@@ -315,6 +316,16 @@ SUBJECT_CONFIGS = {
 PROBLEMS_PER_SUBTOPIC = 40
 
 
+def _batch_difficulty(batch_index: int, num_batches: int) -> str:
+    """Roughly 25/50/25 easy/medium/hard across a subtopic's batches."""
+    position = batch_index / max(1, num_batches)
+    if position < 0.25:
+        return "easy"
+    if position < 0.75:
+        return "medium"
+    return "hard"
+
+
 def _make_slug(name: str) -> str:
     return name.lower().replace(" ", "-").replace("(", "").replace(")", "").replace(",", "")
 
@@ -438,7 +449,9 @@ class ContentGenerationWorkflow(Workflow):
 
                 print(f"    📝 {sub_name} ({existing_count} exist, generating {batches_remaining * BATCH_SIZE} more): ", end="", flush=True)
 
-                # Generate remaining batches in parallel
+                # Generate remaining batches in parallel. Batches run easy ->
+                # medium -> hard in order_index order, so the subtopic quiz
+                # (served by order_index) ramps up in difficulty.
                 batch_tasks = []
                 for b in range(batches_done, num_batches):
                     batch_tasks.append(
@@ -447,6 +460,7 @@ class ContentGenerationWorkflow(Workflow):
                             topic_name=topic_name,
                             subtopic_id=subtopic_id,
                             batch_number=b,
+                            difficulty=_batch_difficulty(b, num_batches),
                             batch_size=BATCH_SIZE,
                             start_order_index=b * BATCH_SIZE,
                             subject=subject_key,
@@ -461,6 +475,10 @@ class ContentGenerationWorkflow(Workflow):
                     if isinstance(result, Exception):
                         print(f"✗", end="", flush=True)
                     else:
+                        # The adaptive engine selects by numeric difficulty_level;
+                        # without it every row gets the DB default (5).
+                        for p in result:
+                            p["difficulty_level"] = DIFFICULTY_LEVELS[p["difficulty"]]
                         try:
                             saved = save_problems(result)
                             total_saved += len(saved)

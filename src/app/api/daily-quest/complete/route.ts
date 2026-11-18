@@ -1,10 +1,18 @@
 import { auth } from "@clerk/nextjs/server";
 import { getUserByClerkId, updateUser } from "@/lib/db/queries/users";
-import { completeDailyQuest, getCurrentQuestStreak, getLocalDateString } from "@/lib/db/queries/daily-quest";
+import {
+  completeDailyQuest,
+  getCurrentQuestStreak,
+  getLocalDateString,
+  recordStreakDay,
+} from "@/lib/db/queries/daily-quest";
 import { generateQuestForDate } from "@/lib/adaptive/generate-quest";
 import { checkNewUnlocks } from "@/lib/gamification/check-unlocks";
 import { supabase } from "@/lib/supabase/client";
-import { NextResponse } from "next/server";
+import { track } from "@/lib/analytics";
+import { NextResponse, after } from "next/server";
+import { notifyQuestComplete } from "@/lib/notifications/events";
+import { liveQuestCompleteDeps } from "@/lib/notifications/store";
 
 export async function POST(req: Request) {
   const { userId: clerkId } = await auth();
@@ -61,30 +69,37 @@ export async function POST(req: Request) {
     timeElapsedSeconds,
   });
 
-  // Calculate current streak from completed quest history (includes the quest we just completed)
+  // The quest's day counts for the streak: record_streak_day stores current/best
+  // streak atomically. Then read it back through the configured source.
   const today = getLocalDateString();
+  await recordStreakDay(user.id, quest.questDate);
+  track("quest_completed", { correct: correctCount, total: answered.length, streak_day: true }, user.id);
   const currentStreak = await getCurrentQuestStreak(user.id);
 
-  const updates: Record<string, number> = {
-    totalXp: (user.totalXp ?? 0) + xpTotal,
-  };
-
-  // Update best_streak if current streak exceeds it
-  if (currentStreak > (user.bestStreak ?? 0)) {
-    updates.bestStreak = currentStreak;
-  }
-
-  await updateUser(clerkId, updates);
+  await updateUser(clerkId, { totalXp: (user.totalXp ?? 0) + xpTotal });
 
   const xpBefore = user.totalXp ?? 0;
   const xpAfter = xpBefore + xpTotal;
   const { newBadges, rankUp } = await checkNewUnlocks(user.id, xpBefore, xpAfter);
 
+  // One combined "quest complete" notification (XP, level up, tier, score milestone),
+  // deduped via notification_log. Runs after the response is sent.
+  after(() =>
+    notifyQuestComplete(liveQuestCompleteDeps, {
+      user,
+      questId,
+      xpEarned: xpTotal,
+      rankUp,
+    }).catch((e) => console.error("Quest-complete notification failed:", e))
+  );
+
   // Pre-generate tomorrow's quest (non-blocking)
   try {
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowDate = tomorrow.toISOString().split("T")[0];
+    // Use local-day string to match how quest dates are read/written elsewhere
+    // (getLocalDateString), avoiding a UTC-shift double-generation.
+    const tomorrowDate = getLocalDateString(tomorrow);
     await generateQuestForDate(user.id, tomorrowDate);
   } catch (e) {
     // Don't fail the completion if pre-generation fails

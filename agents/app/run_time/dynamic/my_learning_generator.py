@@ -8,7 +8,11 @@ import re
 from agno.agent import Agent
 from agno.models.anthropic import Claude
 
+from app.pre_generation.problem_quality import is_valid_problem
+
 MAX_RETRIES = 3
+MIN_VALID_QUESTIONS = 6
+_DIFFICULTY_ORDER = {"easy": 0, "medium": 1, "hard": 2}
 
 generator_agent = Agent(
     name="Athena My Learning Generator",
@@ -41,6 +45,8 @@ generator_agent = Agent(
 }""",
         "Generate exactly 10 questions covering different aspects and difficulties of the topic.",
         "Difficulty mix: 3 easy, 4 medium, 3 hard.",
+        "easy = one concept, direct recall or application. medium = apply a concept to a scenario, 1-2 steps. "
+        "hard = multi-step or combines concepts, hinges on a nuance or exception, every distractor a plausible mistake.",
         "Each question must have exactly 4 options.",
         "correctOption is 0-indexed (0=first option).",
         "solutionSteps: 2-3 steps. Use 'math' field for equations/formulas (empty string if not applicable).",
@@ -112,9 +118,10 @@ async def generate_my_learning_content(topic: str) -> dict:
             # Normalise question field names (handle camelCase variants)
             questions = []
             for i, q in enumerate(result["questions"]):
+                difficulty = q.get("difficulty")
                 questions.append({
                     "orderIndex": q.get("orderIndex", i),
-                    "difficulty": q.get("difficulty", "medium"),
+                    "difficulty": difficulty if difficulty in _DIFFICULTY_ORDER else "medium",
                     "questionText": q.get("questionText", q.get("question_text", "")),
                     "options": q.get("options", []),
                     "correctOption": q.get("correctOption", q.get("correct_option", 0)),
@@ -126,6 +133,16 @@ async def generate_my_learning_content(topic: str) -> dict:
                         q.get("time_recommendation_seconds", 90),
                     ),
                 })
+
+            # Drop malformed questions (wrong option count, bad key), then
+            # serve easy -> medium -> hard so the quiz ramps up instead of
+            # following whatever order the model happened to emit.
+            questions = [q for q in questions if is_valid_problem(q)]
+            if len(questions) < MIN_VALID_QUESTIONS:
+                raise ValueError(f"Only {len(questions)} valid questions in response")
+            questions.sort(key=lambda q: _DIFFICULTY_ORDER[q["difficulty"]])
+            for i, q in enumerate(questions):
+                q["orderIndex"] = i
 
             return {
                 "description": result.get("description", ""),

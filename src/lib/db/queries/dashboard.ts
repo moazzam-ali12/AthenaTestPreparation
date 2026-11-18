@@ -1,5 +1,5 @@
 import { supabase } from "@/lib/supabase/client";
-import { getCurrentQuestStreak, getLocalDateString } from "@/lib/db/queries/daily-quest";
+import { getCurrentQuestStreak, getCurrentWeeklyStreak, getLocalDateString } from "@/lib/db/queries/daily-quest";
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const DAY_ABBREVS = ["S", "M", "T", "W", "T", "F", "S"];
@@ -76,8 +76,11 @@ export async function getDashboardData(userId: string) {
   const completedSessions = (allStatusSessions ?? []).filter((s) => s.status === "completed").length;
   const totalSessions = (allStatusSessions ?? []).length;
 
-  // Calculate streak from daily quest history (consecutive days)
-  const streak = await getCurrentQuestStreak(userId);
+  // Calculate streaks from daily quest history (consecutive days and weeks)
+  const [streak, weeklyStreak] = await Promise.all([
+    getCurrentQuestStreak(userId),
+    getCurrentWeeklyStreak(userId),
+  ]);
 
   // Scores
   const sevenDaysAgo = new Date();
@@ -300,6 +303,7 @@ export async function getDashboardData(userId: string) {
     completedSessions,
     totalSessions,
     streak,
+    weeklyStreak,
     totalScore,
     weeklyDelta,
     topics: topicRows,

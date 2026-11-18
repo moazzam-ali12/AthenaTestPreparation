@@ -1,0 +1,49 @@
+# Nightly logical backup of the Supabase Postgres database (public schema) to a private
+# Supabase Storage bucket, keeping 14 daily + 8 weekly copies. See scripts/backup-db.sh
+# and docs/runbooks/restore.md.
+#
+# Repo settings → Secrets and variables → Actions → Secrets:
+#   BACKUP_DATABASE_URL   session-pooler URL of the project to back up (…pooler.supabase.com:5432)
+#   BACKUP_STORAGE_URL    https://<ref>.supabase.co of the project that holds the bucket
+#   BACKUP_STORAGE_KEY    service-role / sb_secret_ key of that project
+# Optional repo variable: BACKUP_LABEL (default "prod").
+name: Nightly DB backup
+
+on:
+  schedule:
+    - cron: "17 2 * * *" # 02:17 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup-db
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # pg_dump must be >= the server major version (Supabase runs Postgres 17).
+      - name: Install PostgreSQL 17 client
+        run: |
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y > /dev/null
+          sudo apt-get install -y -qq postgresql-client-17 > /dev/null
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+
+      - name: Back up and upload
+        env:
+          BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          BACKUP_STORAGE_URL: ${{ secrets.BACKUP_STORAGE_URL }}
+          BACKUP_STORAGE_KEY: ${{ secrets.BACKUP_STORAGE_KEY }}
+          BACKUP_LABEL: ${{ vars.BACKUP_LABEL || 'prod' }}
+          # App data + migration history (so `supabase db push` works after a restore).
+          BACKUP_SCHEMAS: public,supabase_migrations
+          BACKUP_DIR: ${{ runner.temp }}/backups
+        run: |
+          pg_dump --version
+          bash scripts/backup-db.sh

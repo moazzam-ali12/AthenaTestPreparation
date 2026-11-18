@@ -138,3 +138,91 @@ export function sessionReminderHtml({
 </html>`,
   };
 }
+
+/** Failed renewal: sent on the first failure and again shortly before grace ends. */
+export function paymentFailedHtml({
+  displayName,
+  daysLeft,
+  reminder,
+}: {
+  displayName: string;
+  daysLeft: number;
+  /** True for the "grace ends soon" reminder, false for the first-failure notice. */
+  reminder: boolean;
+}) {
+  const days = `${daysLeft} day${daysLeft === 1 ? "" : "s"}`;
+  return {
+    subject: reminder
+      ? `Your Athena Pro access ends in ${days} — update your card`
+      : "Payment failed — update your card to keep Athena Pro",
+    html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:40px auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+    <tr>
+      <td style="padding:40px 32px;text-align:center;">
+        <h1 style="margin:0 0 8px;font-size:22px;color:#111827;">Hi ${displayName}, your payment didn't go through</h1>
+        <p style="margin:0 0 24px;font-size:16px;color:#4b5563;line-height:1.6;">
+          We couldn't charge your card for Athena Pro. You keep full access for <strong>${days}</strong> —
+          update your payment method to avoid losing it. Your progress and streak are safe.
+        </p>
+        <a href="${appUrl}/billing" style="display:inline-block;padding:12px 32px;background:#dc2626;color:#ffffff;text-decoration:none;border-radius:8px;font-size:16px;font-weight:600;">
+          Update payment method
+        </a>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`,
+  };
+}
+
+/** Generic notification email (same shell as the templates above). Lines are HTML-safe text. */
+export function notificationEmailHtml({
+  subject,
+  emoji,
+  heading,
+  lines,
+  ctaLabel,
+  ctaPath = "/dashboard",
+  ctaColor = "#111827",
+  footer,
+}: {
+  subject: string;
+  emoji: string;
+  heading: string;
+  lines: string[];
+  ctaLabel: string;
+  ctaPath?: string;
+  ctaColor?: string;
+  footer?: string;
+}) {
+  const body = lines
+    .map((l) => `<p style="margin:0 0 8px;font-size:16px;color:#4b5563;line-height:1.6;">${l}</p>`)
+    .join("\n        ");
+  return {
+    subject,
+    html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:40px auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+    <tr>
+      <td style="padding:40px 32px;text-align:center;">
+        <div style="font-size:48px;margin-bottom:16px;">${emoji}</div>
+        <h1 style="margin:0 0 8px;font-size:22px;color:#111827;">${heading}</h1>
+        ${body}
+        <a href="${appUrl}${ctaPath}" style="display:inline-block;margin-top:16px;padding:12px 32px;background:${ctaColor};color:#ffffff;text-decoration:none;border-radius:8px;font-size:16px;font-weight:600;">
+          ${ctaLabel}
+        </a>${footer ? `
+        <p style="margin:24px 0 0;font-size:13px;color:#9ca3af;">${footer}</p>` : ""}
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`,
+  };
+}

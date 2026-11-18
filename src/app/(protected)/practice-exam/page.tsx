@@ -3,8 +3,11 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { CheckCircle2, ChevronLeft, Circle } from "lucide-react";
+import { CheckCircle2, ChevronLeft, Circle, Lock } from "lucide-react";
 import { useCpaExamStatus, useStartCpaExam } from "@/hooks/use-cpa-exam";
+import { useAccess, useTrialUsage } from "@/hooks/use-trial";
+import { useUpgradeModal } from "@/components/trial/upgrade-modal-provider";
+import { SAMPLE_TEST_MINUTES, SAMPLE_TEST_QUESTIONS, SAMPLE_TESTS } from "@/lib/trial";
 import {
   CPA_CORE_SECTIONS,
   CPA_DISCIPLINE_SECTIONS,
@@ -26,8 +29,16 @@ function SectionRow({ section }: { section: CpaSection }) {
   const router = useRouter();
   const { data: status, isLoading } = useCpaExamStatus(section);
   const startMutation = useStartCpaExam();
+  const { isLimited } = useAccess();
+  const { data: trial } = useTrialUsage();
+  const { openUpgrade } = useUpgradeModal();
+  const sampleUsed = isLimited && (trial?.usage.sampleTests ?? 0) >= SAMPLE_TESTS;
 
   const handleStart = async () => {
+    if (sampleUsed) {
+      openUpgrade("sample_test");
+      return;
+    }
     const result = await startMutation.mutateAsync({ section });
     router.push(`/practice-exam/${result.attemptId}`);
   };
@@ -49,8 +60,16 @@ function SectionRow({ section }: { section: CpaSection }) {
             </span>
           </div>
           <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
-            <span>{SECTION_QUESTION_COUNT} questions</span>
-            <span>{Math.round(SECTION_TIME_LIMIT_SECONDS / 60)} min</span>
+            {isLimited ? (
+              <span>
+                Sample test · {SAMPLE_TEST_QUESTIONS} questions · {SAMPLE_TEST_MINUTES} min
+              </span>
+            ) : (
+              <>
+                <span>{SECTION_QUESTION_COUNT} questions</span>
+                <span>{Math.round(SECTION_TIME_LIMIT_SECONDS / 60)} min</span>
+              </>
+            )}
             {!isLoading && progress && (
               <span className="flex items-center gap-1">
                 {progress.passed ? (
@@ -86,10 +105,26 @@ function SectionRow({ section }: { section: CpaSection }) {
             disabled={isLoading || startMutation.isPending}
             className="shrink-0 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {startMutation.isPending ? "Starting..." : "Start"}
+            {startMutation.isPending
+              ? "Starting..."
+              : sampleUsed
+                ? <span className="flex items-center gap-1"><Lock className="h-3.5 w-3.5" /> Pro</span>
+                : isLimited
+                  ? "Start sample"
+                  : "Start"}
           </button>
         )}
       </div>
+      {isLimited && (
+        <button
+          type="button"
+          onClick={() => openUpgrade("locked")}
+          className="mt-3 flex w-full items-center gap-2 border-t pt-3 text-left text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <Lock className="h-3.5 w-3.5" />
+          Full-length mock exam · {SECTION_QUESTION_COUNT} questions · Pro
+        </button>
+      )}
     </motion.div>
   );
 }

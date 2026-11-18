@@ -32,6 +32,7 @@ export async function getQuizQuestions() {
       .from("problems")
       .select("*")
       .eq("source", "onboarding")
+      .eq("status", "approved")
       .eq("difficulty", "easy")
       .order("order_index", { ascending: true })
       .limit(QUIZ_LIMITS.easy),
@@ -39,6 +40,7 @@ export async function getQuizQuestions() {
       .from("problems")
       .select("*")
       .eq("source", "onboarding")
+      .eq("status", "approved")
       .eq("difficulty", "medium")
       .order("order_index", { ascending: true })
       .limit(QUIZ_LIMITS.medium),
@@ -46,6 +48,7 @@ export async function getQuizQuestions() {
       .from("problems")
       .select("*")
       .eq("source", "onboarding")
+      .eq("status", "approved")
       .eq("difficulty", "hard")
       .order("order_index", { ascending: true })
       .limit(QUIZ_LIMITS.hard),

@@ -1,9 +1,11 @@
 import { auth } from "@clerk/nextjs/server";
 import { getUserByClerkId } from "@/lib/db/queries/users";
 import {
+  getAttemptById,
   upsertAnswer,
   updateAttemptPosition,
 } from "@/lib/db/queries/cpa-exam";
+import { getAnswerKeys } from "@/lib/db/queries/answer-keys";
 import { NextResponse } from "next/server";
 
 export async function POST(req: Request) {
@@ -18,13 +20,13 @@ export async function POST(req: Request) {
   }
 
   const body = await req.json();
+  // isCorrect in the body is ignored — graded server-side below.
   const {
     attemptId,
     problemId,
     module,
     orderIndex,
     selectedOption,
-    isCorrect,
     responseTimeMs,
   } = body as {
     attemptId: string;
@@ -32,13 +34,23 @@ export async function POST(req: Request) {
     module: number;
     orderIndex: number;
     selectedOption: number;
-    isCorrect: boolean;
     responseTimeMs?: number;
   };
 
-  if (!attemptId || !problemId || module == null || orderIndex == null || selectedOption == null || isCorrect == null) {
+  if (!attemptId || !problemId || module == null || orderIndex == null || typeof selectedOption !== "number") {
     return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
   }
+
+  const attempt = await getAttemptById(attemptId);
+  if (!attempt || attempt.userId !== user.id) {
+    return NextResponse.json({ error: "Attempt not found" }, { status: 404 });
+  }
+
+  const answerKey = (await getAnswerKeys([problemId])).get(problemId);
+  if (!answerKey) {
+    return NextResponse.json({ error: "Problem not found" }, { status: 404 });
+  }
+  const isCorrect = selectedOption === answerKey.correctOption;
 
   await upsertAnswer(attemptId, {
     problemId,

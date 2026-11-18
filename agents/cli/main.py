@@ -10,6 +10,8 @@ Usage:
     python -m cli.main seed-question-bank [--subject all] [--count 25] [--force]
     python -m cli.main seed-cpa-exam-bank [--section all] [--count 50] [--force]
     python -m cli.main assemble-cpa-section-exam --section aud [--test-number 1]
+    python -m cli.main generate-practice --subject aud [--subtopic slug] [--per-subtopic 5] [--dry-run] [--out f.json] [--from-file f.json] [--counts]
+    python -m cli.main generate-tbs --subject far [--per-subtopic 1] [--limit-subtopics 4] [--dry-run] [--out f.json] [--from-file f.json]
 """
 
 import argparse
@@ -18,6 +20,12 @@ import sys
 import time
 
 from dotenv import load_dotenv
+
+# The Windows console defaults to cp1252, which can't encode the emoji in
+# progress output; force UTF-8 so the CLI works without PYTHONIOENCODING.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 
 load_dotenv()
 
@@ -91,6 +99,63 @@ async def cmd_seed_practice_problems(args):
     minutes = int(elapsed // 60)
     seconds = int(elapsed % 60)
     print(f"\n✅ Seeded {len(problems)} problems in {minutes}m {seconds}s")
+
+
+async def cmd_topup_question_bank(args):
+    from app.pre_generation.seed_act_question_bank import topup_question_bank
+
+    print(f"  Topping up question bank: subject={args.subject}, easy>={args.easy}, hard>={args.hard}")
+    start = time.time()
+    stats = await topup_question_bank(subject=args.subject, easy=args.easy, hard=args.hard)
+    elapsed = int(time.time() - start)
+    print(
+        f"\n✅ {stats['generated']} problems across {stats['subtopics_topped_up']} subtopics "
+        f"({stats['failed']} failed) in {elapsed // 60}m {elapsed % 60}s"
+    )
+
+
+async def cmd_generate_tbs(args):
+    from app.pre_generation.tbs_generator import generate_tbs
+
+    mode = "DRY RUN (nothing saved)" if args.dry_run else "saving to tbs_tasks"
+    print(f"  Generating TBS: subject={args.subject}, per-subtopic={args.per_subtopic}, {mode}")
+    start = time.time()
+    records = await generate_tbs(
+        subject=args.subject,
+        per_subtopic=args.per_subtopic,
+        limit_subtopics=args.limit_subtopics,
+        dry_run=args.dry_run,
+        out=args.out,
+        from_file=args.from_file,
+        verify=not args.no_verify,
+    )
+    elapsed = int(time.time() - start)
+    approved = sum(1 for r in records if r["status"] == "approved")
+    print(f"\n✅ {approved}/{len(records)} approved in {elapsed // 60}m {elapsed % 60}s")
+
+
+async def cmd_generate_practice(args):
+    from app.pre_generation.practice_generator import generate_practice, practice_counts
+
+    if not args.counts:
+        mode = "DRY RUN (nothing saved)" if args.dry_run else "saving to problems (source='practice')"
+        print(f"  Generating practice: subject={args.subject}, per-subtopic={args.per_subtopic}, {mode}")
+        start = time.time()
+        stats = await generate_practice(
+            subject=args.subject,
+            per_subtopic=args.per_subtopic,
+            subtopic=args.subtopic,
+            dry_run=args.dry_run,
+            out=args.out,
+            from_file=args.from_file,
+        )
+        elapsed = int(time.time() - start)
+        print(f"\n✅ {stats} in {elapsed // 60}m {elapsed % 60}s")
+
+    if args.counts or not args.dry_run:
+        print(f"\n  {'Section':<8}{'Subtopics':>10}{'>=' + str(args.per_subtopic):>8}{'Min':>6}{'Total':>7}")
+        for section, subs, ok, low, total in practice_counts(args.subject, args.per_subtopic):
+            print(f"  {section:<8}{subs:>10}{ok:>8}{low:>6}{total:>7}")
 
 
 async def cmd_seed_question_bank(args):
@@ -257,6 +322,15 @@ def main():
     p_qb.add_argument("--count", type=int, default=25, help="Problems per subtopic (default: 25)")
     p_qb.add_argument("--force", action="store_true", help="Re-seed even if problems exist")
 
+    # topup-question-bank
+    p_top = subparsers.add_parser(
+        "topup-question-bank",
+        help="Generate only the missing easy/hard problems per subtopic (re-runnable)",
+    )
+    p_top.add_argument("--subject", default="all", choices=["aud", "far", "reg", "bar", "isc", "tcp", "all"])
+    p_top.add_argument("--easy", type=int, default=8, help="Minimum easy problems per subtopic (default: 8)")
+    p_top.add_argument("--hard", type=int, default=8, help="Minimum hard problems per subtopic (default: 8)")
+
     # seed-cpa-exam-bank
     p_fact = subparsers.add_parser("seed-cpa-exam-bank", help="Seed the full CPA section exam problem bank")
     p_fact.add_argument("--section", default="far", choices=["aud", "far", "reg", "bar", "isc", "tcp", "all"])
@@ -268,6 +342,29 @@ def main():
     p_cpa_assemble.add_argument("--section", required=True, choices=["aud", "far", "reg", "bar", "isc", "tcp"])
     p_cpa_assemble.add_argument("--test-number", type=int, default=None, help="Exam number within the section (auto-increments if omitted)")
 
+    # generate-tbs
+    p_tbs = subparsers.add_parser("generate-tbs", help="Generate Task-Based Simulations (checked + verified)")
+    p_tbs.add_argument("--subject", default="all", choices=["aud", "far", "reg", "bar", "isc", "tcp", "all"])
+    p_tbs.add_argument("--per-subtopic", type=int, default=1, help="Tasks per subtopic (default: 1)")
+    p_tbs.add_argument("--limit-subtopics", type=int, default=None, help="Only N subtopics per section, spread evenly")
+    p_tbs.add_argument("--dry-run", action="store_true", help="Generate and check, but don't write to the DB")
+    p_tbs.add_argument("--out", default=None, help="Write generated records (incl. answer keys) to this JSON file")
+    p_tbs.add_argument("--from-file", default=None, help="Insert records from a previous --out file (no LLM calls)")
+    p_tbs.add_argument("--no-verify", action="store_true", help="Skip the independent answer-key check (tasks saved as draft)")
+
+    # generate-practice
+    p_prac = subparsers.add_parser(
+        "generate-practice",
+        help="Generate tutor practice problems (source='practice'): checked + answer-key verified, re-runnable",
+    )
+    p_prac.add_argument("--subject", default="all", choices=["aud", "far", "reg", "bar", "isc", "tcp", "all"])
+    p_prac.add_argument("--per-subtopic", type=int, default=5, help="Target per subtopic (default 5: 2 easy, 2 medium, 1 hard)")
+    p_prac.add_argument("--subtopic", default=None, help="Only this subtopic slug")
+    p_prac.add_argument("--dry-run", action="store_true", help="Generate and check, but don't write to the DB")
+    p_prac.add_argument("--out", default=None, help="Write approved records (incl. answer keys) to this JSON file")
+    p_prac.add_argument("--from-file", default=None, help="Insert records from a previous --out file (no LLM calls)")
+    p_prac.add_argument("--counts", action="store_true", help="Only print the per-section practice count table")
+
     args = parser.parse_args()
 
     dispatch = {
@@ -276,8 +373,11 @@ def main():
         "seed-practice-problems": cmd_seed_practice_problems,
         "generate-content": cmd_generate_content,
         "seed-question-bank": cmd_seed_question_bank,
+        "topup-question-bank": cmd_topup_question_bank,
         "seed-cpa-exam-bank": cmd_seed_cpa_exam_bank,
         "assemble-cpa-section-exam": cmd_assemble_cpa_section_exam,
+        "generate-tbs": cmd_generate_tbs,
+        "generate-practice": cmd_generate_practice,
     }
 
     asyncio.run(dispatch[args.command](args))

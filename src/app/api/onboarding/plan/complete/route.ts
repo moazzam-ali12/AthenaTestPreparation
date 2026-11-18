@@ -2,6 +2,7 @@ import { auth } from "@clerk/nextjs/server";
 import { getUserByClerkId, updateUser } from "@/lib/db/queries/users";
 import { upsertOnboardingProgress } from "@/lib/db/queries/onboarding";
 import { upsertUserPreferences } from "@/lib/db/queries/preferences";
+import { isCandidateStage } from "@/lib/candidate-stage";
 import { NextResponse } from "next/server";
 
 export async function POST(req: Request) {
@@ -17,6 +18,10 @@ export async function POST(req: Request) {
 
   const body = await req.json();
   const { name, grade, learnerTypes, interests, strugglingTopic, targetDisciplineSection } = body;
+
+  if (!isCandidateStage(grade)) {
+    return NextResponse.json({ error: "Invalid candidate stage" }, { status: 400 });
+  }
 
   await upsertUserPreferences(user.id, {
     name,

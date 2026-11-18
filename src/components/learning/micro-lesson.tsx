@@ -26,6 +26,7 @@ import { useSound } from "@/hooks/useSound";
 import { MathContent } from "@/components/quiz/math-content";
 import { PracticeGradientCard } from "@/components/quiz/practice-gradient-card";
 import type { Problem } from "@/components/quiz/types";
+import type { CpaSubject } from "@/types/cpa-exam";
 import { WhiteboardSkeleton } from "@/components/whiteboard/whiteboard-skeleton";
 import { GenerationProgress } from "@/components/lessons/generation-progress";
 import { WhyThisMattersModal } from "@/components/learning/why-this-matters-modal";
@@ -52,7 +53,9 @@ type MicroLessonProps = {
   existingLesson?: { lessonContent: string; whiteboardSteps: WhiteboardStep[] } | null;
   subtopicApiPath?: string;
   practiceMode?: {
-    subject?: "math" | "english" | "reading" | "science" | "aud" | "far" | "reg" | "bar" | "isc" | "tcp";
+    subject?: CpaSubject;
+    /** Lets the server pick practice difficulty from the candidate's skill level. */
+    subtopicId?: string;
     quizStreamUrl?: string;
   };
   tracking?: {
@@ -662,7 +665,8 @@ export function MicroLesson({
             body: JSON.stringify({
               topic,
               subtopic,
-              subject: practiceMode?.subject ?? "math",
+              subject: practiceMode?.subject,
+              subtopicId: practiceMode?.subtopicId,
             }),
           });
       if (!res.ok) throw new Error("Failed to load practice problems");
@@ -674,7 +678,7 @@ export function MicroLesson({
     } finally {
       setIsPracticeLoading(false);
     }
-  }, [topic, subtopic, practiceMode?.subject, providedPracticeProblems, myLearningPracticeUrl]);
+  }, [topic, subtopic, practiceMode?.subject, practiceMode?.subtopicId, providedPracticeProblems, myLearningPracticeUrl]);
 
   // Pre-fetch problems near end of lesson
   useEffect(() => {

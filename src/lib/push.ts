@@ -18,7 +18,7 @@ if (vapidPublicKey && vapidPrivateKey) {
   vapidConfigured = true;
 }
 
-type PushPayload = {
+export type PushPayload = {
   title: string;
   body: string;
   url?: string;
@@ -31,7 +31,16 @@ export async function sendPushToUser(
   if (!vapidConfigured) return { sent: 0, failed: 0 };
 
   const subs = await getPushSubscriptionsByUserId(userId);
-  if (!subs.length) return { sent: 0, failed: 0 };
+  return sendPushToSubscriptions(userId, subs, payload);
+}
+
+/** Sends to already-loaded subscriptions (batch callers load them once per page). */
+export async function sendPushToSubscriptions(
+  userId: string,
+  subs: { endpoint: string; p256dh: string; auth: string }[],
+  payload: PushPayload
+): Promise<{ sent: number; failed: number }> {
+  if (!vapidConfigured || !subs.length) return { sent: 0, failed: 0 };
 
   const payloadStr = JSON.stringify({ url: "/dashboard", ...payload });
   let sent = 0;

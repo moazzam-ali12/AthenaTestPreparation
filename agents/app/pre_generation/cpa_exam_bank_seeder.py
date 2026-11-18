@@ -38,11 +38,8 @@ PROBLEMS_PER_SUBTOPIC = 50
 SUBTOPIC_CONCURRENCY = 3
 BATCH_CONCURRENCY = 6
 
-DIFFICULTY_LEVELS = {
-    "easy": 3,
-    "medium": 5,
-    "hard": 8,
-}
+# Re-exported: seed_act_question_bank imports it from here.
+from app.pre_generation.problem_quality import DIFFICULTY_LEVELS  # noqa: E402
 
 
 def _ensure_topic_and_subtopics(content_map: dict, subject: str) -> None:

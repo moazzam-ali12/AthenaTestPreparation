@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Send, Mic, Keyboard, GraduationCap } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useMentorConversation } from "@/hooks/use-mentor-conversation";
+import { useCurrentUser } from "@/hooks/use-current-user";
 import { MessageBubble } from "@/components/lessons/message-bubble";
 import { VoiceOrb } from "@/components/lessons/voice-orb";
 import { ThinkingIndicator } from "@/components/lessons/thinking-indicator";
@@ -30,6 +31,8 @@ export default function MentorPage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const isNearBottomRef = useRef(true);
 
+  const { data: userData } = useCurrentUser();
+
   const {
     messages,
     mode,
@@ -43,7 +46,7 @@ export default function MentorPage() {
     startRecording,
     stopRecording,
     toggleMode,
-  } = useMentorConversation();
+  } = useMentorConversation(userData?.user.id);
 
   const {
     currentStepIndex,

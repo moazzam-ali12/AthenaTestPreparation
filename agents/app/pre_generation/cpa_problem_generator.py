@@ -12,6 +12,13 @@ import json
 from agno.agent import Agent
 from agno.models.anthropic import Claude
 
+from app.pre_generation.problem_quality import (
+    DIFFICULTY_RUBRIC,
+    PROBLEM_TYPE_ROTATIONS,
+    is_valid_problem,
+    verify_answer_keys,
+)
+
 BATCH_SIZE = 10
 MAX_RETRIES = 3
 
@@ -52,6 +59,7 @@ cpa_problem_agent = Agent(
         "BAR: focus on business analysis case scenarios, financial valuation, and advanced technical accounting.",
         "ISC: focus on IT governance, systems, security, and data management scenarios.",
         "TCP: focus on tax planning and compliance scenarios requiring strategic judgment.",
+        DIFFICULTY_RUBRIC,
         "Keep explanations CONCISE to stay within output limits.",
         "Never use em-dashes (—) in any text fields.",
         "Return ONLY the JSON array, no markdown code fences or extra text.",
@@ -87,15 +95,6 @@ def _extract_json_array(text: str) -> list[dict]:
         raise ValueError(f"Could not parse JSON from LLM output (length={len(content)})")
 
 
-PROBLEM_TYPE_ROTATIONS = [
-    "straightforward application of the core rule or concept",
-    "problems where a common candidate error leads to a tempting wrong answer",
-    "multi-step problems that chain two or more concepts together",
-    "real-world engagement or business context problems",
-    "problems involving data, schedules, or tables",
-]
-
-
 async def generate_cpa_problems_batch(
     subtopic_name: str,
     topic_name: str,
@@ -105,8 +104,11 @@ async def generate_cpa_problems_batch(
     batch_size: int = BATCH_SIZE,
     start_order_index: int = 0,
     subject: str = "far",
+    verify: bool = False,
 ) -> list[dict]:
-    subject_label = CPA_SUBJECT_LABELS.get(subject, "CPA Financial Accounting and Reporting (FAR)")
+    if subject not in CPA_SUBJECT_LABELS:
+        raise ValueError(f"Unknown CPA subject '{subject}'. Choose from: {', '.join(CPA_SUBJECT_LABELS)}")
+    subject_label = CPA_SUBJECT_LABELS[subject]
     problem_type = PROBLEM_TYPE_ROTATIONS[batch_number % len(PROBLEM_TYPE_ROTATIONS)]
 
     section_notes = {
@@ -136,9 +138,11 @@ async def generate_cpa_problems_batch(
     for attempt in range(MAX_RETRIES):
         try:
             response = await cpa_problem_agent.arun(prompt)
-            problems = _extract_json_array(response.content)
+            problems = [p for p in _extract_json_array(response.content) if is_valid_problem(p)]
+            if verify:
+                problems = await verify_answer_keys(problems, subject_label)
             if not problems:
-                raise ValueError("Empty problems array")
+                raise ValueError("No valid problems in response")
             result = []
             for i, p in enumerate(problems):
                 result.append({

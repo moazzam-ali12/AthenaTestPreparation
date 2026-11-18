@@ -1,6 +1,7 @@
 import { auth } from "@clerk/nextjs/server";
 import { getUserByClerkId } from "@/lib/db/queries/users";
 import { getOnboardingProgress } from "@/lib/db/queries/onboarding";
+import { getAccess } from "@/lib/subscription";
 import { NextResponse } from "next/server";
 
 export async function GET() {
@@ -16,5 +17,7 @@ export async function GET() {
 
   const onboarding = await getOnboardingProgress(user.id);
 
-  return NextResponse.json({ user, onboarding });
+  const access = getAccess(user);
+
+  return NextResponse.json({ user, onboarding, access });
 }

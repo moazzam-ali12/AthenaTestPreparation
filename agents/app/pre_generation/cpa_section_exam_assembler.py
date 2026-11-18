@@ -83,38 +83,73 @@ def _resolve_subtopic_id(topic_name: str, subtopic_name: str) -> str | None:
     return subtopic_row["id"] if subtopic_row else None
 
 
+# Exam-wide difficulty mix. Applied across the whole form rather than per
+# subtopic: per-subtopic counts are usually 1-3, which would round to
+# all-medium.
+DIFFICULTY_MIX = {"easy": 0.3, "medium": 0.4, "hard": 0.3}
+
+# When a subtopic has no unused problem in the wanted band, take the nearest.
+_BAND_FALLBACK = {
+    "easy": ["easy", "medium", "hard"],
+    "medium": ["medium", "easy", "hard"],
+    "hard": ["hard", "medium", "easy"],
+}
+
+
+def _band_sequence(total: int) -> list[str]:
+    """A shuffled list of `total` difficulty bands matching DIFFICULTY_MIX."""
+    easy = round(total * DIFFICULTY_MIX["easy"])
+    hard = round(total * DIFFICULTY_MIX["hard"])
+    seq = ["easy"] * easy + ["hard"] * hard + ["medium"] * (total - easy - hard)
+    random.shuffle(seq)
+    return seq
+
+
 def _select_problems(
     subtopic_id: str,
-    count: int,
+    bands: list[str],
     used_ids: set[str],
 ) -> list[dict]:
-    """Select `count` random unused problems for a subtopic."""
+    """Select one unused problem per requested band for a subtopic."""
     all_problems = get_cpa_problems_for_subtopic(subtopic_id)
-    available = [p for p in all_problems if p["id"] not in used_ids]
+    by_band: dict[str, list[dict]] = {"easy": [], "medium": [], "hard": []}
+    for p in all_problems:
+        if p["id"] not in used_ids:
+            by_band.get(p.get("difficulty") or "medium", by_band["medium"]).append(p)
+    for pool in by_band.values():
+        random.shuffle(pool)
 
-    if len(available) < count:
-        print(f"    !! Only {len(available)} available (need {count}) for subtopic {subtopic_id[:8]}...")
-        count = len(available)
+    selected: list[dict] = []
+    for band in bands:
+        for candidate_band in _BAND_FALLBACK[band]:
+            if by_band[candidate_band]:
+                selected.append(by_band[candidate_band].pop())
+                break
 
-    if count == 0:
-        return []
-
-    return random.sample(available, count)
+    if len(selected) < len(bands):
+        print(f"    !! Only {len(selected)} available (need {len(bands)}) for subtopic {subtopic_id[:8]}...")
+    return selected
 
 
 def _assemble_problems(distribution: dict, used_ids: set[str]) -> list[dict]:
     """Collect problems for one CPA section exam according to its distribution."""
+    total = sum(count for subtopics in distribution.values() for count in subtopics.values())
+    band_seq = _band_sequence(total)
+    cursor = 0
+
     problems: list[dict] = []
     for topic_name, subtopics in distribution.items():
         for subtopic_name, count in subtopics.items():
             if count <= 0:
                 continue
+            bands = band_seq[cursor : cursor + count]
+            cursor += count
             subtopic_id = _resolve_subtopic_id(topic_name, subtopic_name)
             if not subtopic_id:
                 print(f"    !! {subtopic_name}: subtopic not found in DB")
                 continue
 
-            selected = _select_problems(subtopic_id, count, used_ids)
+            selected = _select_problems(subtopic_id, bands, used_ids)
             for p in selected:
                 used_ids.add(p["id"])
             problems.extend(selected)
@@ -158,6 +193,8 @@ def assemble_cpa_section_exam(
 
     problems = _assemble_problems(distribution, used_ids)
     print(f"\n  Total selected: {len(problems)} / {total_questions}")
+    mix = {b: sum(1 for p in problems if p.get("difficulty") == b) for b in ("easy", "medium", "hard")}
+    print(f"  Difficulty mix: {mix}")
 
     # Create the exam record
     exam = create_cpa_section_exam(section_code, test_number, name)

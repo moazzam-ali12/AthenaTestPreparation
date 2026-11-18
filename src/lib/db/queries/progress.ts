@@ -75,6 +75,15 @@ export async function getProgressData(userId: string) {
       return { date, score: cumulative };
     });
 
+  // 1b. Accuracy over time: per-session accuracy (%) by date, chronological.
+  // Complements the categorical accuracyByDifficulty snapshot with a trend line.
+  const accuracyOverTime = sessions
+    .filter((s) => s.total_questions > 0)
+    .map((s) => ({
+      date: s.created_at.split("T")[0],
+      accuracy: Math.round((s.score / s.total_questions) * 100),
+    }));
+
   // 2. Accuracy by difficulty
   const difficultyStats: Record<string, { total: number; correct: number }> = {};
   for (const ans of answers) {
@@ -211,10 +220,64 @@ export async function getProgressData(userId: string) {
 
   const masteredCount = topicMasteryList.filter((s) => s.mastered).length;
 
+  // Per-topic accuracy trend over time.
+  // The overall improvementTrend (in analytics.ts) is a single global signal;
+  // this breaks it down per topic so a learner can see which areas are moving
+  // up vs. sliding. Each topic's sessions (already chronological) are split into
+  // an earlier and later half; the delta in mean per-session accuracy drives the
+  // direction, using the same ±5% band as the global trend for consistency.
+  const TREND_BAND = 5; // percentage points
+  const MIN_TREND_SESSIONS = 4; // need enough sessions for two meaningful halves
+
+  const sessionsByTopic: Record<string, { accuracy: number }[]> = {};
+  for (const s of sessions) {
+    if (!s.subtopic_id || !s.total_questions) continue;
+    const subtopic = subtopicMap[s.subtopic_id];
+    if (!subtopic) continue;
+    const topic = topicMap[subtopic.topic_id];
+    if (!topic) continue;
+    (sessionsByTopic[topic.slug] ??= []).push({
+      accuracy: Math.round((s.score / s.total_questions) * 100),
+    });
+  }
+
+  const mean = (nums: number[]) =>
+    nums.length > 0 ? nums.reduce((a, b) => a + b, 0) / nums.length : 0;
+
+  const topicTrends = topics
+    .map((t) => {
+      const topicSessions = sessionsByTopic[t.slug] ?? [];
+      if (topicSessions.length < MIN_TREND_SESSIONS) return null;
+
+      const mid = Math.floor(topicSessions.length / 2);
+      const earlier = mean(topicSessions.slice(0, mid).map((s) => s.accuracy));
+      const later = mean(topicSessions.slice(mid).map((s) => s.accuracy));
+      const delta = Math.round(later - earlier);
+      const direction: "improving" | "declining" | "stable" =
+        delta > TREND_BAND ? "improving" : delta < -TREND_BAND ? "declining" : "stable";
+
+      return {
+        name: t.name,
+        slug: t.slug,
+        subject: t.subject,
+        sessionCount: topicSessions.length,
+        earlierAccuracy: Math.round(earlier),
+        latestAccuracy: topicSessions[topicSessions.length - 1].accuracy,
+        delta,
+        direction,
+      };
+    })
+    .filter((t): t is NonNullable<typeof t> => t !== null)
+    // Biggest movers first (largest absolute change), so the most actionable
+    // trends surface at the top.
+    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+
   return {
     scoreHistory: cumulativeScoreHistory,
+    accuracyOverTime,
     accuracyByDifficulty,
     topicPerformance: allTopicPerformance,
+    topicTrends,
     recentSessions,
     overallStats: {
       totalQuestions: totalQ,

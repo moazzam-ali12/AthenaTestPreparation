@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { CreditCard, Zap, Check, AlertCircle, ExternalLink } from "lucide-react";
+import { CreditCard, Zap, Check, AlertCircle, ExternalLink, FileText } from "lucide-react";
 import { toast } from "sonner";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import Link from "next/link";
 import { NotificationToggle } from "@/components/settings/notification-toggle";
+import { PLANS, isPlanId } from "@/lib/plans";
 
 const PRO_FEATURES = [
   "Unlimited practice quizzes across AUD, FAR, REG, BAR, ISC & TCP",
@@ -55,9 +56,14 @@ export default function BillingPage() {
   const [portalLoading, setPortalLoading] = useState(false);
 
   const user = userData?.user;
-  const isSubscribed =
-    user?.subscriptionStatus === "active" ||
-    user?.subscriptionStatus === "trialing";
+  const status = user?.subscriptionStatus;
+  const graceDaysLeft = userData?.access?.graceDaysLeft ?? 0;
+  const isSubscribed = status === "active" || status === "trialing" || graceDaysLeft > 0;
+  const paymentFailing = status === "past_due" || status === "unpaid";
+  // Plan changes, card updates and invoice history all live in the Stripe portal.
+  const canManage = isSubscribed || paymentFailing;
+  const billingPlan = user?.billingPlan;
+  const plan = isPlanId(billingPlan) ? PLANS[billingPlan] : null;
 
   async function handleManage() {
     setPortalLoading(true);
@@ -113,9 +119,14 @@ export default function BillingPage() {
                 <span className="text-2xl font-bold">
                   {isSubscribed ? "Athena Pro" : "Free"}
                 </span>
+                {isSubscribed && plan && (
+                  <span className="text-sm text-muted-foreground">
+                    {plan.label} · ${plan.price}/{plan.interval === "year" ? "yr" : "mo"}
+                  </span>
+                )}
                 <StatusBadge status={user?.subscriptionStatus ?? "free"} />
               </div>
-              {isSubscribed && user?.subscriptionEndDate && (
+              {isSubscribed && !paymentFailing && user?.subscriptionEndDate && (
                 <p className="mt-1.5 text-xs text-muted-foreground">
                   Renews{" "}
                   {new Date(user.subscriptionEndDate).toLocaleDateString("en-US", {
@@ -127,7 +138,7 @@ export default function BillingPage() {
               )}
             </div>
 
-            {isSubscribed ? (
+            {canManage ? (
               <button
                 onClick={handleManage}
                 disabled={portalLoading}
@@ -147,7 +158,7 @@ export default function BillingPage() {
             )}
           </div>
 
-          {user?.subscriptionStatus === "past_due" && (
+          {paymentFailing && (
             <div className="mt-4 flex items-start gap-2 border border-yellow-500/30 bg-yellow-500/5 p-3 text-xs text-yellow-400">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
@@ -158,9 +169,22 @@ export default function BillingPage() {
                 >
                   update your payment method
                 </button>{" "}
-                to keep access.
+                {graceDaysLeft > 0
+                  ? `to keep access (${graceDaysLeft} ${graceDaysLeft === 1 ? "day" : "days"} left).`
+                  : "to restore access."}
               </span>
             </div>
+          )}
+
+          {user?.stripeCustomerId && (
+            <button
+              onClick={handleManage}
+              disabled={portalLoading}
+              className="mt-4 inline-flex items-center gap-1.5 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline disabled:opacity-60"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              Invoices &amp; receipts
+            </button>
           )}
         </motion.div>
 
@@ -186,7 +210,9 @@ export default function BillingPage() {
             <div className="mt-6 border-t pt-5">
               <p className="text-sm font-medium mb-0.5">
                 Unlock full access for{" "}
-                <span className="font-bold text-primary">$19/month</span>
+                <span className="font-bold text-primary">
+                  ${PLANS.monthly.price}/month or ${PLANS.annual.price}/year
+                </span>
               </p>
               <p className="text-xs text-muted-foreground mb-4">
                 Secure payment via Stripe · Cancel anytime

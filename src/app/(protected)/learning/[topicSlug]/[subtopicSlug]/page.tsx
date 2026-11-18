@@ -6,6 +6,8 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
+import { useAccess } from "@/hooks/use-trial";
+import { LockedFeatureLink } from "@/components/trial/locked-feature-link";
 import {
   ChevronLeft,
   Clock,
@@ -62,6 +64,8 @@ type PageData = {
   topic: { slug: string; name: string };
   subtopic: Subtopic;
   problems: Problem[];
+  /** Quiz length; trial users get it without the question content. */
+  questionCount?: number;
 };
 
 const stagger = {
@@ -77,6 +81,7 @@ const fadeUp = {
 export default function SubtopicPage() {
   const params = useParams<{ topicSlug: string; subtopicSlug: string }>();
   const router = useRouter();
+  const { isLimited } = useAccess();
 
   const { data, isLoading, isError } = useQuery<PageData>({
     queryKey: ["learning", params.topicSlug, params.subtopicSlug],
@@ -109,6 +114,7 @@ export default function SubtopicPage() {
   if (!data) return null;
 
   const { topic, subtopic, problems } = data;
+  const questionCount = data.questionCount ?? problems.length;
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-8">
@@ -150,7 +156,11 @@ export default function SubtopicPage() {
         transition={{ duration: 0.3, delay: 0.08 }}
         className="grid gap-3 mb-10 grid-cols-2"
       >
-        <Link href={`/learning/${params.topicSlug}/${subtopic.slug}/micro-lesson`} className="block">
+        <LockedFeatureLink
+          locked={isLimited}
+          href={`/learning/${params.topicSlug}/${subtopic.slug}/micro-lesson`}
+          className="block"
+        >
           <motion.div
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
@@ -166,9 +176,9 @@ export default function SubtopicPage() {
               Start <ArrowRight className="h-3 w-3" />
             </div>
           </motion.div>
-        </Link>
+        </LockedFeatureLink>
 
-        {problems.length > 0 ? (
+        {questionCount > 0 ? (
           <button onClick={() => router.push(`/learning/${params.topicSlug}/${params.subtopicSlug}/quiz`)} className="block text-left w-full">
             <motion.div
               whileHover={{ scale: 1.02 }}
@@ -180,7 +190,7 @@ export default function SubtopicPage() {
                 <ClipboardList className="h-5 w-5 text-primary" />
               </div>
               <p className="font-bold text-sm uppercase tracking-wide mb-1">Take Quiz</p>
-              <p className="text-xs text-muted-foreground mb-4">{problems.length} questions — CPA Exam-style practice</p>
+              <p className="text-xs text-muted-foreground mb-4">{questionCount} questions — CPA Exam-style practice</p>
               <div className="flex items-center gap-1 text-xs font-semibold text-primary">
                 Enter <ArrowRight className="h-3 w-3" />
               </div>

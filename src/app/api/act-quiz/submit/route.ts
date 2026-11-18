@@ -9,9 +9,14 @@ import {
   subjectToSectionCategory,
 } from "@/lib/db/queries/subsection-skills";
 import { updateSkillAfterAnswer } from "@/lib/adaptive/engine";
+import { getAnswerReveals, toClientReveal, type AnswerReveal } from "@/lib/db/queries/answer-keys";
+import { checkOverallLevelUp } from "@/lib/adaptive/overall-level";
 import { checkNewUnlocks } from "@/lib/gamification/check-unlocks";
 import { supabase } from "@/lib/supabase/client";
 import { NextResponse } from "next/server";
+import { getFeatureTier } from "@/lib/subscription";
+import { getConsumedItemIds } from "@/lib/db/queries/trial";
+import { trialLimitResponse } from "@/lib/trial-gate";
 
 export async function POST(req: Request) {
   const { userId: clerkId } = await auth();
@@ -25,7 +30,7 @@ export async function POST(req: Request) {
   }
 
   const body = await req.json();
-  const { subtopicId, score, totalQuestions, timeElapsedSeconds, answers, events } =
+  const { subtopicId, totalQuestions, timeElapsedSeconds, answers: clientAnswers, events } =
     body as {
       subtopicId: string;
       score: number;
@@ -54,13 +59,35 @@ export async function POST(req: Request) {
 
   if (
     !subtopicId ||
-    score == null ||
     !totalQuestions ||
     timeElapsedSeconds == null ||
-    !Array.isArray(answers)
+    !Array.isArray(clientAnswers)
   ) {
     return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
   }
+
+  // Free trial: every answered MCQ must have been counted by
+  // /api/act-quiz/answer. Unanswered ones (selectedOption -1) were never
+  // counted and simply grade as wrong. Saving otherwise works as for Pro.
+  const isTrial = getFeatureTier(user) !== "pro";
+  const consumed = isTrial ? await getConsumedItemIds(user.id, "mcq") : null;
+  if (consumed && clientAnswers.some((a) => a.selectedOption >= 0 && !consumed.has(a.problemId))) {
+    return trialLimitResponse("mcq", null);
+  }
+
+  // Re-grade against the server's answer keys: the client's isCorrect and
+  // score can't be trusted (score gates curriculum unlocks). A question only
+  // counts as correct on a clean first try, matching the quiz UI's rule.
+  const answerKeys = await getAnswerReveals(clientAnswers.map((a) => a.problemId));
+  const answers = clientAnswers
+    .filter((a) => answerKeys.has(a.problemId))
+    .map((a) => ({
+      ...a,
+      isCorrect:
+        a.selectedOption === answerKeys.get(a.problemId)!.correctOption &&
+        (a.wrongCount ?? 0) === 0,
+    }));
+  const score = answers.filter((a) => a.isCorrect).length;
 
   const session = await saveActQuizSession({
     userId: user.id,
@@ -92,6 +119,7 @@ export async function POST(req: Request) {
   }
 
   let xpEarned = 0;
+  let overallLevelUp: number | null = null;
   try {
     const { data: subtopicData } = await supabase
       .from("subtopics")
@@ -104,16 +132,6 @@ export async function POST(req: Request) {
       const topic = subtopicData.topics as unknown as { subject: string };
       const sectionCategory = subjectToSectionCategory(topic?.subject ?? "aud");
 
-      const problemIds = answers.map((a) => a.problemId);
-      const { data: problems } = await (supabase as any)
-        .from("problems")
-        .select("id, difficulty_level")
-        .in("id", problemIds) as { data: { id: string; difficulty_level: number }[] | null };
-
-      const difficultyMap = new Map(
-        (problems ?? []).map((p) => [p.id, p.difficulty_level as number])
-      );
-
       let skill = await getSubsectionSkill(user.id, subtopicId);
       if (!skill) {
         await initializeAllSkills(user.id);
@@ -125,7 +143,7 @@ export async function POST(req: Request) {
         let totalXpEarned = 0;
 
         for (const answer of answers) {
-          const diffLevel = difficultyMap.get(answer.problemId) ?? 5;
+          const diffLevel = answerKeys.get(answer.problemId)!.difficultyLevel;
           const mutations = updateSkillAfterAnswer(
             currentSkill,
             answer.isCorrect,
@@ -152,49 +170,28 @@ export async function POST(req: Request) {
             totalXp: (user.totalXp ?? 0) + totalXpEarned,
           });
         }
+
+        if (currentSkill.level > skill.level) {
+          overallLevelUp = await checkOverallLevelUp(user.id);
+        }
       }
     }
   } catch (e) {
     console.error("Failed to update subsection skills:", e);
   }
 
-  const { data: sessionHistory } = await supabase
-    .from("sessions")
-    .select("scheduled_date, status")
-    .eq("user_id", user.id)
-    .order("scheduled_date", { ascending: false })
-    .limit(30);
-
-  const completedHistory = (sessionHistory ?? [])
-    .filter((s) => s.status === "completed")
-    .sort(
-      (a, b) =>
-        new Date(b.scheduled_date).getTime() -
-        new Date(a.scheduled_date).getTime()
-    );
-
-  let currentStreak = 0;
-  if (completedHistory.length > 0) {
-    currentStreak = 1;
-    for (let i = 1; i < completedHistory.length; i++) {
-      const curr = new Date(completedHistory[i].scheduled_date);
-      const prev = new Date(completedHistory[i - 1].scheduled_date);
-      const diffDays =
-        (prev.getTime() - curr.getTime()) / (1000 * 60 * 60 * 24);
-      if (diffDays <= 7) {
-        currentStreak++;
-      } else {
-        break;
-      }
-    }
-  }
-
-  if (currentStreak > (user.bestStreak ?? 0)) {
-    await updateUser(clerkId, { bestStreak: currentStreak });
-  }
+  // Streak: a quiz doesn't make a day count (only a completed daily quest does,
+  // via recordStreakDay), so nothing to write here.
 
   const xpBefore = user.totalXp ?? 0;
   const { newBadges, rankUp } = await checkNewUnlocks(user.id, xpBefore, xpBefore + xpEarned);
 
-  return NextResponse.json({ sessionId: session.id, newBadges, rankUp });
+  // The quiz is over: reveal every question for the review screen — for trial
+  // users only the counted ones (skipped MCQs stay unseen and uncounted).
+  const reveals: Record<string, AnswerReveal> = {};
+  for (const [id, key] of answerKeys) {
+    if (!consumed || consumed.has(id)) reveals[id] = toClientReveal(key);
+  }
+
+  return NextResponse.json({ sessionId: session.id, score, newBadges, rankUp, overallLevelUp, reveals });
 }

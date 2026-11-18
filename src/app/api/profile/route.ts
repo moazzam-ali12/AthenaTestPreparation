@@ -7,6 +7,8 @@ import { buildBadgeInput } from "@/lib/db/queries/badges";
 import { getRankProgress, RANKS } from "@/lib/ranks";
 import { computeBadges } from "@/lib/badges";
 import { supabase } from "@/lib/supabase/client";
+import { getAccess, getGraceEndsAt } from "@/lib/subscription";
+import { currentLockedGap } from "@/lib/db/queries/streak-freezes";
 import { NextResponse } from "next/server";
 
 const DAY_ABBREVS = ["S", "M", "T", "W", "T", "F", "S"];
@@ -22,8 +24,19 @@ export async function GET() {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
 
+  // Expired users see the streak they'll keep on subscribing (locked days are frozen).
+  const access = getAccess(user);
+  const pendingGap =
+    access.tier === "expired"
+      ? currentLockedGap({
+          trialEndsAt: access.trialEndsAt,
+          subscriptionEndDate: user.subscriptionEndDate,
+          graceEndsAt: getGraceEndsAt(user),
+        })
+      : null;
+
   const [profileData, sectionProgress] = await Promise.all([
-    getProfileData(user.id),
+    getProfileData(user.id, pendingGap ? [pendingGap] : []),
     getAllSectionProgress(user.id),
   ]);
 

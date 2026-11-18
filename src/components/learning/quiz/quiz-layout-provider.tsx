@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { toast } from "sonner";
 import { usePathname } from "next/navigation";
 import { useQuizState } from "@/components/learning/quiz/use-quiz-state";
 import { useQuizTimer } from "@/components/learning/quiz/use-quiz-timer";
 import { QuizRouteContext, type UnlockData } from "@/components/learning/quiz/quiz-route-context";
-import type { Problem } from "@/components/quiz/types";
+import type { AnswerReveal, Problem } from "@/components/quiz/types";
 import type { FeedbackState } from "@/components/quiz/answer-panel";
+import type { CpaSubject } from "@/types/cpa-exam";
 
 type QuizEvent = {
   problemId: string;
@@ -35,31 +37,62 @@ type SavePayload = {
   events?: QuizEvent[];
 };
 
+/** Server verdict for one answer, plus that question's (now revealed) answer data. */
+export type CheckedAnswer = { isCorrect: boolean } & AnswerReveal;
+
 type QuizLayoutProviderProps = {
   problems: Problem[];
   topicName: string;
   subtopicName: string;
-  subject?: "math" | "english" | "reading" | "science";
+  subject?: CpaSubject;
+  subtopicId?: string;
   struggling?: boolean;
   basePath: string;
   practiceProblemsUrl?: string;
-  onSaveResults: (payload: SavePayload) => Promise<UnlockData | void>;
+  /** May return `reveals` (post-submit answer data) for the review screen. */
+  onSaveResults: (
+    payload: SavePayload
+  ) => Promise<(UnlockData & { reveals?: Record<string, AnswerReveal> }) | void>;
+  /**
+   * Server-side grading for quizzes whose payload carries no answers
+   * (problems arrive with HIDDEN_ANSWER). Resolve null when the answer was
+   * refused (e.g. trial 402 — the upgrade modal handles that). Omit to grade
+   * locally against `problem.correctOption`.
+   */
+  checkAnswer?: (problemId: string, selectedOption: number) => Promise<CheckedAnswer | null>;
   children: React.ReactNode;
 };
 
 export function QuizLayoutProvider({
-  problems,
+  problems: baseProblems,
   topicName,
   subtopicName,
   subject,
+  subtopicId,
   struggling = false,
   basePath,
   practiceProblemsUrl,
   onSaveResults,
+  checkAnswer,
   children,
 }: QuizLayoutProviderProps) {
   const pathname = usePathname();
   const onTutorRoute = pathname.endsWith("/tutor");
+
+  // Answers revealed by the server, merged over the answer-less payload so
+  // the rest of the quiz (scoring, hints, solution, tutor) reads them as usual.
+  const [revealed, setRevealed] = useState<Map<string, AnswerReveal>>(new Map());
+  const problems = useMemo(
+    () =>
+      revealed.size === 0
+        ? baseProblems
+        : baseProblems.map((p) => {
+            const r = revealed.get(p.id);
+            return r ? { ...p, ...r } : p;
+          }),
+    [baseProblems, revealed]
+  );
+  const pendingIdsRef = useRef<Set<string>>(new Set());
 
   const quiz = useQuizState(problems);
   const timer = useQuizTimer(problems, quiz.phase);
@@ -106,19 +139,13 @@ export function QuizLayoutProvider({
     return () => { document.body.style.overflow = ""; };
   }, []);
 
-  const handleSelectAnswer = useCallback(
-    (problemId: string, optionIndex: number) => {
-      const problem = problems.find((p) => p.id === problemId);
-      if (!problem) return;
-
-      const isCorrect = optionIndex === problem.correctOption;
-      const responseTimeMs = quiz.getQuestionElapsedMs(problemId);
-
+  const applyAnswer = useCallback(
+    (problemId: string, optionIndex: number, isCorrect: boolean, correctOption: number, responseTimeMs: number) => {
       if (isCorrect) {
         quiz.selectAnswer(problemId, optionIndex);
         setLockedIds((prev) => new Set(prev).add(problemId));
         setFeedbackMap((prev) =>
-          new Map(prev).set(problemId, { type: "correct", correctOption: problem.correctOption })
+          new Map(prev).set(problemId, { type: "correct", correctOption })
         );
 
         if (onTutorRoute) {
@@ -138,7 +165,7 @@ export function QuizLayoutProvider({
         if (lockedIds.has(problemId)) return;
         quiz.selectAnswer(problemId, optionIndex);
         setFeedbackMap((prev) =>
-          new Map(prev).set(problemId, { type: "wrong", correctOption: problem.correctOption })
+          new Map(prev).set(problemId, { type: "wrong", correctOption })
         );
         quiz.onWrongAnswer(problemId);
 
@@ -155,7 +182,35 @@ export function QuizLayoutProvider({
         }, 2000);
       }
     },
-    [lockedIds, problems, quiz, onTutorRoute, recordEvent]
+    [lockedIds, quiz, onTutorRoute, recordEvent]
+  );
+
+  const handleSelectAnswer = useCallback(
+    (problemId: string, optionIndex: number) => {
+      const problem = problems.find((p) => p.id === problemId);
+      if (!problem) return;
+      const responseTimeMs = quiz.getQuestionElapsedMs(problemId);
+
+      // Local grading: no server check configured, or this question's answer
+      // was already revealed (retries are free and need no round trip).
+      if (!checkAnswer || problem.correctOption >= 0) {
+        applyAnswer(problemId, optionIndex, optionIndex === problem.correctOption, problem.correctOption, responseTimeMs);
+        return;
+      }
+
+      if (lockedIds.has(problemId) || pendingIdsRef.current.has(problemId)) return;
+      pendingIdsRef.current.add(problemId);
+      checkAnswer(problemId, optionIndex)
+        .then((res) => {
+          if (!res) return;
+          const { isCorrect, ...reveal } = res;
+          setRevealed((prev) => new Map(prev).set(problemId, reveal));
+          applyAnswer(problemId, optionIndex, isCorrect, reveal.correctOption, responseTimeMs);
+        })
+        .catch(() => toast.error("Couldn't check your answer. Please try again."))
+        .finally(() => pendingIdsRef.current.delete(problemId));
+    },
+    [problems, quiz, checkAnswer, lockedIds, applyAnswer]
   );
 
   // Save results when submitted
@@ -167,7 +222,8 @@ export function QuizLayoutProvider({
       return {
         problemId: p.id,
         selectedOption: quiz.answers.has(p.id) ? quiz.answers.get(p.id)! : -1,
-        isCorrect: quiz.answers.get(p.id) === p.correctOption,
+        // Same rule as the score memo: only a clean first-try solve counts.
+        isCorrect: quiz.answers.get(p.id) === p.correctOption && quiz.getWrongCount(p.id) === 0,
         responseTimeMs: quiz.getQuestionElapsedMs(p.id),
         wrongCount: quiz.getWrongCount(p.id),
         hintUsed: qPhase === "hint" || qPhase === "tutor" || qPhase === "practice",
@@ -183,7 +239,11 @@ export function QuizLayoutProvider({
       events: eventsRef.current,
     })
       .then((result) => {
-        if (result) setUnlockData(result);
+        if (result) {
+          const { reveals, ...unlock } = result;
+          if (reveals) setRevealed((prev) => new Map([...prev, ...Object.entries(reveals)]));
+          setUnlockData(unlock);
+        }
         setSaveStatus("saved");
       })
       .catch(() => setSaveStatus("error"));
@@ -197,6 +257,7 @@ export function QuizLayoutProvider({
         topicName,
         subtopicName,
         subject,
+        subtopicId,
         basePath,
         practiceProblemsUrl,
         quiz,

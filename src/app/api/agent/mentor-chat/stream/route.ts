@@ -1,9 +1,13 @@
 import { auth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
+import { track } from "@/lib/analytics";
 import { getUserByClerkId } from "@/lib/db/queries/users";
 import { getProgressData } from "@/lib/db/queries/progress";
 import { getDashboardData } from "@/lib/db/queries/dashboard";
 import { getAllSectionProgress } from "@/lib/db/queries/cpa-exam";
+import { getMentorAttemptContext } from "@/lib/db/queries/analytics";
+import { getUserPreferences } from "@/lib/db/queries/preferences";
+import { getCandidateStage } from "@/lib/candidate-stage";
 import { CPA_CORE_SECTIONS } from "@/types/cpa-exam";
 import { trimHistory } from "@/lib/trim-history";
 
@@ -19,6 +23,7 @@ export async function POST(req: Request) {
   if (!user) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
+  track("tutor_used", { surface: "mentor" }, user.id);
 
   const body = await req.json();
   const { question, history } = body as {
@@ -34,11 +39,15 @@ export async function POST(req: Request) {
   }
 
   try {
-    const [progress, dashboard, sectionProgress] = await Promise.all([
-      getProgressData(user.id),
-      getDashboardData(user.id),
-      getAllSectionProgress(user.id),
-    ]);
+    const [progress, dashboard, sectionProgress, attemptContext, prefs] =
+      await Promise.all([
+        getProgressData(user.id),
+        getDashboardData(user.id),
+        getAllSectionProgress(user.id),
+        getMentorAttemptContext(user.id, 20),
+        getUserPreferences(user.id),
+      ]);
+    const stage = getCandidateStage(prefs?.grade);
 
     // Identify weak and strong topics
     const weakTopics = progress.topicPerformance
@@ -67,6 +76,11 @@ export async function POST(req: Request) {
     const studentContext = {
       display_name: user.displayName,
       target_discipline_section: user.targetDisciplineSection,
+      // Where they are in the CPA journey (from onboarding) and how to coach them for it.
+      candidate_stage: stage?.label ?? null,
+      stage_guidance: stage?.guidance ?? null,
+      // Self-reported in onboarding; may be free text the candidate typed.
+      struggling_topic: prefs?.strugglingTopic ?? null,
       section_status: sectionStatus,
       sections_passed: sectionStatus.filter((s) => s.passed).length,
       sections_total: sectionStatus.length,
@@ -86,6 +100,18 @@ export async function POST(req: Request) {
         total_questions: s.totalQuestions,
         date: s.date,
       })),
+      // Specific answered questions the candidate got wrong, so the mentor can
+      // reference actual mistakes/misconceptions instead of only scores.
+      recent_mistakes: attemptContext.recentWrongAttempts.map((a) => ({
+        subsection: a.subsection,
+        concepts: a.conceptTags,
+        chose: a.chosenAnswer,
+        correct: a.correctAnswer,
+        misconception: a.misconception,
+        difficulty: a.difficulty,
+        response_time_ms: a.responseTimeMs,
+      })),
+      subsection_accuracy: attemptContext.subsectionAccuracy,
     };
 
     const res = await fetch(`${AGENT_URL}/mentor-chat/stream`, {

@@ -6,24 +6,32 @@ problems without revealing answers. Controls the whiteboard directly.
 from agno.agent import Agent
 from agno.models.anthropic import Claude
 from app.run_time.act.whiteboard_agent import WHITEBOARD_INSTRUCTIONS
+from app.run_time.act.tutor_modes import (
+    AnswerLeakGuard,
+    mock_llm_enabled,
+    mock_tutor_stream,
+    mode_instructions,
+    normalize_mode,
+)
 
 quiz_tutor_agent = Agent(
     name="Athena Quiz Tutor",
     model=Claude(id="claude-sonnet-4-6"),
     description="You are Athena, a Socratic CPA exam prep tutor that guides candidates through quiz problems without giving away answers.",
     instructions=[
-        "You are Athena, a Socratic CPA exam prep tutor helping a candidate during a quiz.",
-        "NEVER reveal the correct answer, the correct option letter, or confirm/deny which option is right.",
-        "NEVER show or repeat the solution steps verbatim — use them only to guide your questioning.",
-        "When a candidate first asks for help, ask where specifically they are stuck.",
-        "Guide the candidate ONE small step at a time using leading questions.",
-        "Keep every response short: 1-3 sentences max.",
-        "If the candidate asks for the answer directly, politely refuse and redirect: ask what they've tried so far.",
-        "Use the hint and solution steps internally to craft your guiding questions, but never expose them.",
-        "If the candidate is on the right track, encourage them and nudge toward the next step.",
-        "If the candidate is off track, ask a clarifying question that steers them back without giving it away.",
-        "If the candidate is truly stuck after 2-3 exchanges and not making progress, offer the hint provided in the internal context. Present it naturally as your own suggestion, not as a quoted hint.",
-        "If the candidate is still stuck after receiving the hint, walk them through the first solution step conceptually — frame it as a question like 'What if you tried…?' rather than stating it directly.",
+        "You are Athena, a CPA exam prep tutor helping a candidate during a quiz.",
+        "Each message ends with a TUTORING MODE block (Hint, Guided, Full explanation or Why was I wrong?). "
+        "Follow it exactly; it overrides the general guidance below when they conflict.",
+        "Unless the TUTORING MODE explicitly allows it, NEVER reveal the correct answer, the correct option letter, "
+        "or confirm/deny which option is right, and never repeat the solution steps verbatim.",
+        "If the candidate asks for the answer directly while it is not allowed, politely refuse and suggest "
+        "they answer first or switch to the Full explanation after answering.",
+        "ADAPT TO THE CANDIDATE'S LEVEL when a proficiency level is provided in the internal context: "
+        "for 'beginner' or 'developing', break steps into smaller pieces, use plainer language, define "
+        "terms as they come up, and give a little extra encouragement. For 'proficient' or 'advanced', "
+        "be more concise, skip the basics, and ask more demanding Socratic questions that stretch them. "
+        "Never mention the level or their stats to the candidate.",
+        "If the candidate is off track, ask a clarifying question that steers them back.",
         "When writing math or numeric expressions, ALWAYS use LaTeX delimiters: $...$ for inline math and $$...$$ for display math. For example: $\\frac{1}{2}$, $x^2 + 3x$. Never write raw fractions like 1/2 or expressions like x^2 without LaTeX.",
         "Use clear, professional language appropriate for an adult accounting professional preparing for a licensing exam.",
         "CRITICAL FORMATTING RULE: Never use em-dashes (—) under any circumstances. "
@@ -35,7 +43,8 @@ quiz_tutor_agent = Agent(
         "QUIZ WHITEBOARD RULES: When a candidate asks for help, write the problem's key figures, "
         "formula, or calculation on the board so they can see it clearly. Highlight or underline "
         "the part relevant to your hint. NEVER draw the solution or subsequent steps — only what "
-        "the candidate should focus on RIGHT NOW. For example, if the problem involves solving "
+        "the candidate should focus on RIGHT NOW (in Full explanation mode after answering, you may draw the "
+        "worked steps). For example, if the problem involves solving "
         "2x + 5 = 11 and the candidate is stuck, write the equation and underline '+5' to hint "
         "at the inverse operation. Don't draw 2x = 6.",
     ],
@@ -54,6 +63,9 @@ def _build_quiz_prompt(
     correct_option: int,
     student_answer: int | None,
     history: list[dict] | None = None,
+    skill_level: str | None = None,
+    performance_summary: str | None = None,
+    mode: str = "hint",
 ) -> str:
     option_labels = [
         f"{chr(65 + i)}) {opt}" for i, opt in enumerate(options)
@@ -67,6 +79,16 @@ def _build_quiz_prompt(
         if student_answer is not None
         else "The candidate has not selected an answer yet."
     )
+
+    level_info = ""
+    if skill_level:
+        level_info = f"Candidate proficiency level: {skill_level}"
+        if performance_summary:
+            level_info += f" ({performance_summary})"
+        level_info += (
+            ". Adapt your scaffolding depth, vocabulary, and pace to this level "
+            "as instructed. Do not mention the level or these stats to the candidate.\n"
+        )
 
     history_text = ""
     if history:
@@ -89,10 +111,11 @@ def _build_quiz_prompt(
         f"Hint: {hint}\n"
         f"Solution steps:\n{steps_text}\n"
         f"{student_info}\n"
+        f"{level_info}"
         f"[END INTERNAL CONTEXT]\n"
         f"{history_text}\n"
         f"Candidate's message: {question}\n\n"
-        "Respond as a Socratic tutor. Do NOT reveal the answer or solution steps."
+        + mode_instructions(mode, student_answer is not None)
     )
 
 
@@ -107,14 +130,36 @@ async def ask_quiz_tutor_stream(
     correct_option: int,
     student_answer: int | None,
     history: list[dict] | None = None,
+    skill_level: str | None = None,
+    performance_summary: str | None = None,
+    mode: str = "hint",
 ):
-    """Stream Socratic guidance, yielding content chunks."""
-    prompt = _build_quiz_prompt(
-        question, topic, subtopic, question_text, options,
-        hint, solution_steps, correct_option, student_answer,
-        history,
-    )
-    response_stream = quiz_tutor_agent.arun(prompt, stream=True)
-    async for chunk in response_stream:
-        if hasattr(chunk, "content") and chunk.content:
-            yield chunk.content.replace("—", " - ")
+    """Stream tutor output for the requested mode, yielding content chunks.
+
+    Before the candidate answers (student_answer is None) every mode's output
+    passes through AnswerLeakGuard, so the correct option is never streamed
+    regardless of what the model writes.
+    """
+    mode = normalize_mode(mode)
+    if mode == "why_wrong" and (student_answer is None or student_answer == correct_option):
+        mode = "hint"  # nothing to analyse; the web route already rejects this
+
+    async def raw():
+        if mock_llm_enabled():
+            async for c in mock_tutor_stream(mode, options, correct_option, student_answer):
+                yield c
+            return
+        prompt = _build_quiz_prompt(
+            question, topic, subtopic, question_text, options,
+            hint, solution_steps, correct_option, student_answer,
+            history, skill_level, performance_summary, mode,
+        )
+        async for chunk in quiz_tutor_agent.arun(prompt, stream=True):
+            if hasattr(chunk, "content") and chunk.content:
+                yield chunk.content.replace("—", " - ")
+
+    stream = raw()
+    if student_answer is None:
+        stream = AnswerLeakGuard(correct_option, options, question_text).guard(stream)
+    async for chunk in stream:
+        yield chunk

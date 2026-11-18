@@ -23,6 +23,8 @@ export type CpaExamContextValue = {
 
   timeLeft: number;
   displayTime: string;
+  /** Attempt time limit (short for trial sample tests). */
+  durationMinutes: number;
 
   goNext: () => void;
   goBack: () => void;

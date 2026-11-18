@@ -8,12 +8,17 @@ import { useTutorCharacter } from "@/components/providers/tutor-character-provid
 import { CharacterAvatar, TutorCharacterPopover } from "@/components/tutor/tutor-character-popover";
 import { getTutorCharacter } from "@/lib/tutor-characters";
 import { MathContent } from "@/components/quiz/math-content";
+import { TutorQuotaHint } from "@/components/trial/tutor-quota-hint";
 
 type Message = { role: "user" | "assistant"; content: string };
 
 // Button is 60px — this margin keeps its top-left corner (which x/y
 // position) comfortably inside the viewport instead of at its exact edge.
 const FAB_MARGIN = 90;
+// Below the md breakpoint the fixed MobileNav (~65px) covers the bottom of
+// the screen, so the FAB rests above it instead of on top of the Profile tab.
+const MOBILE_NAV_BREAKPOINT = 768;
+const MOBILE_NAV_HEIGHT = 64;
 
 export function FloatingAITutor() {
   const [open, setOpen] = useState(false);
@@ -41,7 +46,10 @@ export function FloatingAITutor() {
     const update = () =>
       setRestAnchor({
         x: window.innerWidth - FAB_MARGIN,
-        y: window.innerHeight - FAB_MARGIN,
+        y:
+          window.innerHeight -
+          FAB_MARGIN -
+          (window.innerWidth < MOBILE_NAV_BREAKPOINT ? MOBILE_NAV_HEIGHT : 0),
       });
     update();
     window.addEventListener("resize", update);
@@ -228,8 +236,11 @@ export function FloatingAITutor() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 24, scale: 0.95 }}
             transition={{ type: "spring", stiffness: 380, damping: 30 }}
-            className="fixed bottom-6 right-6 z-50 flex flex-col rounded-2xl border bg-background shadow-2xl overflow-hidden"
-            style={{ width: 360, height: minimized ? "auto" : 500 }}
+            className="fixed bottom-20 right-4 md:bottom-6 md:right-6 z-50 flex flex-col rounded-2xl border bg-background shadow-2xl overflow-hidden"
+            style={{
+              width: "min(360px, calc(100vw - 2rem))",
+              height: minimized ? "auto" : "min(500px, calc(100dvh - 7rem))",
+            }}
           >
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-3 border-b bg-primary/5 shrink-0">
@@ -339,6 +350,11 @@ export function FloatingAITutor() {
                     ))}
                     <div ref={bottomRef} />
                   </div>
+
+                  <TutorQuotaHint
+                    refreshKey={isStreaming ? null : messages.length}
+                    className="border-t px-3 pt-1.5 -mb-1.5 text-right"
+                  />
 
                   {/* Input */}
                   <div className="border-t p-3 flex gap-2 items-end shrink-0">

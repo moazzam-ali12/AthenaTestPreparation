@@ -14,7 +14,11 @@ import { Calculator } from "@/components/quiz/calculator";
 import { ResultsScreen } from "@/components/quiz/results-screen";
 import { PostLessonPractice } from "@/components/learning/post-lesson-practice";
 import { StuckModal } from "@/components/quiz/stuck-modal";
+import { SolutionWalkthrough } from "@/components/quiz/solution-walkthrough";
 import { UnlockCelebration } from "@/components/shared/unlock-celebration";
+import { useAccess } from "@/hooks/use-trial";
+import { hasTutorAccess } from "@/lib/trial";
+import { useUpgradeModal } from "@/components/trial/upgrade-modal-provider";
 
 export function QuizProblemPageContent() {
   const router = useRouter();
@@ -25,6 +29,7 @@ export function QuizProblemPageContent() {
     topicName,
     subtopicName,
     subject,
+    subtopicId,
     basePath,
     quiz,
     timer,
@@ -46,6 +51,10 @@ export function QuizProblemPageContent() {
   const [practiceCompleted, setPracticeCompleted] = useState(false);
   const [showStuckModal, setShowStuckModal] = useState(false);
   const [celebrationDismissed, setCelebrationDismissed] = useState(false);
+  // AI summary + AI tutor: Pro, and trial while TUTOR_ENABLED_IN_TRIAL.
+  const { tier } = useAccess();
+  const tutorLocked = tier !== null && !hasTutorAccess(tier);
+  const { openUpgrade } = useUpgradeModal();
 
   const { mutate: fetchSummary, data: aiSummary } = useMutation({
     mutationFn: async () => {
@@ -90,16 +99,19 @@ export function QuizProblemPageContent() {
   const questionPhase = currentProblem ? quiz.getQuestionPhase(currentProblem.id) : "question";
   const hasCorrectAnswer =
     currentProblem && quiz.answers.get(currentProblem.id) === currentProblem.correctOption;
-  const canAdvance = questionPhase === "question" && !!hasCorrectAnswer;
+  // Users without the AI tutor can't open it, so let them move on after 2 misses.
+  const canAdvance =
+    (questionPhase === "question" && !!hasCorrectAnswer) ||
+    (tutorLocked && questionPhase === "tutor");
 
   // Fetch AI summary when quiz is submitted
   const summaryFetchedRef = useRef(false);
   useEffect(() => {
-    if (quiz.phase === "submitted" && !summaryFetchedRef.current) {
+    if (quiz.phase === "submitted" && !summaryFetchedRef.current && hasTutorAccess(tier)) {
       summaryFetchedRef.current = true;
       fetchSummary();
     }
-  }, [quiz.phase, fetchSummary]);
+  }, [quiz.phase, fetchSummary, tier]);
 
   // Show stuck modal when question enters tutor phase (only once per problem)
   useEffect(() => {
@@ -111,8 +123,12 @@ export function QuizProblemPageContent() {
   const handleStuckModalComplete = useCallback(() => {
     if (currentProblem) markStuckModalShown(currentProblem.id);
     setShowStuckModal(false);
+    if (tutorLocked) {
+      openUpgrade("locked");
+      return;
+    }
     router.push(`${quizBase}/${quiz.currentIndex + 1}/tutor`);
-  }, [router, quizBase, quiz.currentIndex, currentProblem, markStuckModalShown]);
+  }, [router, quizBase, quiz.currentIndex, currentProblem, markStuckModalShown, tutorLocked, openUpgrade]);
 
   if (!currentProblem) return null;
 
@@ -123,7 +139,8 @@ export function QuizProblemPageContent() {
           <PostLessonPractice
             topic={topicName}
             subtopic={subtopicName}
-            subject={subject ?? "math"}
+            subject={subject}
+            subtopicId={subtopicId}
             onComplete={() => {
               setShowPractice(false);
               setPracticeCompleted(true);
@@ -144,6 +161,7 @@ export function QuizProblemPageContent() {
         <ResultsScreen
           problems={problems}
           answers={quiz.answers}
+          wrongCounts={quiz.wrongCounts}
           score={quiz.score}
           elapsed={timer.elapsed}
           aiSummary={aiSummary}
@@ -226,6 +244,15 @@ export function QuizProblemPageContent() {
                       {currentProblem.detailedHint}
                     </p>
                   )}
+                  {/* Opt-in worked solution: available in-the-moment for a stuck
+                      learner, deterministic and independent of the AI tutor.
+                      Collapsed by default so it doesn't spoil a retry. */}
+                  <SolutionWalkthrough
+                    collapsible
+                    explanation={currentProblem.explanation}
+                    solutionSteps={currentProblem.solutionSteps}
+                    triggerLabel="Still stuck? Show step-by-step solution"
+                  />
                 </motion.div>
               );
             })()}

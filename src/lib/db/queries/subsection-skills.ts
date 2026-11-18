@@ -1,5 +1,6 @@
 import { supabase } from "@/lib/supabase/client";
 import type { SubsectionSkill, SectionCategory } from "@/types/adaptive";
+import { averagePracticedLevel, levelToProficiency } from "@/lib/adaptive/engine";
 
 const CPA_SECTIONS: SectionCategory[] = ["AUD", "FAR", "REG", "BAR", "ISC", "TCP"];
 
@@ -109,6 +110,47 @@ export async function upsertSubsectionSkill(
 
   if (error || !data) throw new Error(error?.message ?? "Failed to upsert subsection skill");
   return mapSkill(data);
+}
+
+export type SkillProfile = {
+  /** Coarse proficiency band used to adapt tutor tone/scaffolding. */
+  band: "beginner" | "developing" | "proficient" | "advanced";
+  avgLevel: number;
+  overallAccuracy: number;
+  totalAttempts: number;
+};
+
+/**
+ * Aggregates a user's subsection skills into a compact proficiency profile so
+ * AI feedback (tutor wording, scaffolding depth) can adapt to their level.
+ * When `subtopicId` matches an existing skill, that subtopic's level drives the
+ * band; otherwise the average across all skills is used.
+ */
+export async function getUserSkillProfile(
+  userId: string,
+  subtopicId?: string
+): Promise<SkillProfile | null> {
+  const skills = await getAllSubsectionSkills(userId);
+  if (skills.length === 0) return null;
+
+  const totalAttempts = skills.reduce((s, k) => s + k.totalAttempts, 0);
+  const totalCorrect = skills.reduce((s, k) => s + k.correctAttempts, 0);
+  const overallAccuracy =
+    totalAttempts > 0 ? Math.round((totalCorrect / totalAttempts) * 100) : 0;
+
+  const scoped = subtopicId
+    ? skills.find((s) => s.subtopicId === subtopicId)
+    : undefined;
+  // Averaging all skills (including every untouched subtopic in all 6
+  // sections) kept nearly everyone in "beginner"; use practiced ones only.
+  const avgLevel = scoped ? scoped.level : (averagePracticedLevel(skills) ?? 1);
+
+  return {
+    band: levelToProficiency(avgLevel),
+    avgLevel: Math.round(avgLevel * 10) / 10,
+    overallAccuracy,
+    totalAttempts,
+  };
 }
 
 export async function initializeAllSkills(userId: string): Promise<SubsectionSkill[]> {

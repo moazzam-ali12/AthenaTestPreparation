@@ -1,53 +1,41 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { Trophy, XCircle, ArrowRight } from "lucide-react";
+import { Trophy, XCircle, ArrowRight, ClipboardCheck } from "lucide-react";
 import { CPA_PASSING_SCORE } from "@/lib/cpa-scoring";
-import { SECTION_QUESTION_COUNT } from "@/types/cpa-exam";
-import type { CpaSectionExamAttempt } from "@/types/cpa-exam";
+import { PRICING_PATH } from "@/lib/trial";
+import { useCpaExamAttempt } from "@/hooks/use-cpa-exam";
+import { ExamReviewSection } from "@/components/cpa-exam/exam-review-section";
 
 type Results = {
   section: string;
   rawScore: number;
   scaledScore: number;
+  total: number;
   passed: boolean;
+  isSample: boolean;
 };
 
 export default function CpaExamResultsPage() {
   const router = useRouter();
   const params = useParams<{ attemptId: string }>();
-  const [results, setResults] = useState<Results | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    async function fetchResults() {
-      try {
-        const res = await fetch("/api/practice-exam/history");
-        if (!res.ok) throw new Error("Failed to fetch");
-        const data = await res.json();
-        const attempt = (data.attempts as CpaSectionExamAttempt[] | undefined)?.find(
-          (a) => a.id === params.attemptId
-        );
-        if (attempt && attempt.status === "completed" && attempt.scaledScore != null) {
-          setResults({
-            section: attempt.section,
-            rawScore: attempt.rawScore ?? 0,
-            scaledScore: attempt.scaledScore,
-            passed: attempt.passed ?? false,
-          });
+  // Loaded by attempt ID (shared cache with the attempt layout) — refresh-safe, never calls /start.
+  const { data, isLoading: loading, isFetching } = useCpaExamAttempt(params.attemptId);
+  const results: Results | null =
+    data && data.attempt.status === "completed" && data.scaledScore != null
+      ? {
+          section: data.attempt.section,
+          rawScore: data.rawScore ?? 0,
+          scaledScore: data.scaledScore,
+          total: data.total,
+          passed: data.passed ?? false,
+          isSample: data.isSample,
         }
-      } catch {
-        // Results may not be available yet
-      } finally {
-        setLoading(false);
-      }
-    }
-    fetchResults();
-  }, [params.attemptId]);
+      : null;
 
-  if (loading) {
+  if (loading || (!results && isFetching)) {
     return (
       <div className="flex items-center justify-center h-screen">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-muted border-t-primary" />
@@ -58,7 +46,7 @@ export default function CpaExamResultsPage() {
   if (!results) {
     return (
       <div className="flex flex-col items-center justify-center h-screen gap-4">
-        <p className="text-muted-foreground">Results not available yet.</p>
+        <p className="text-muted-foreground">Result not found.</p>
         <button
           onClick={() => router.push("/practice-exam")}
           className="text-sm font-medium text-primary hover:underline"
@@ -69,7 +57,14 @@ export default function CpaExamResultsPage() {
     );
   }
 
-  const scoreColor = results.passed ? "text-green-500" : "text-red-500";
+  // Sample tests are practice only: no pass/fail verdict.
+  const scoreColor = results.isSample
+    ? "text-primary"
+    : results.passed
+      ? "text-green-500"
+      : "text-red-500";
+  const barColor = results.isSample ? "bg-primary" : results.passed ? "bg-green-500" : "bg-red-500";
+  const totalQuestions = results.total;
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-background overflow-auto">
@@ -81,7 +76,9 @@ export default function CpaExamResultsPage() {
         >
           <div className="mb-4 flex items-center justify-center">
             <div className="rounded-full bg-primary/10 p-4">
-              {results.passed ? (
+              {results.isSample ? (
+                <ClipboardCheck className="h-10 w-10 text-primary" />
+              ) : results.passed ? (
                 <Trophy className="h-10 w-10 text-amber-500" />
               ) : (
                 <XCircle className="h-10 w-10 text-red-500" />
@@ -89,11 +86,13 @@ export default function CpaExamResultsPage() {
             </div>
           </div>
           <h1 className="text-2xl font-bold tracking-tight">
-            {results.section} Practice Exam Complete
+            {results.section} {results.isSample ? "Sample Test" : "Practice Exam"} Complete
           </h1>
-          <p className={`mt-2 text-lg font-semibold ${scoreColor}`}>
-            {results.passed ? "Passed" : "Not Passed"}
-          </p>
+          {!results.isSample && (
+            <p className={`mt-2 text-lg font-semibold ${scoreColor}`}>
+              {results.passed ? "Passed" : "Not Passed"}
+            </p>
+          )}
         </motion.div>
 
         <motion.div
@@ -120,16 +119,35 @@ export default function CpaExamResultsPage() {
           className="mt-10 rounded-lg border bg-card p-5 text-center"
         >
           <p className="text-3xl font-bold tabular-nums">
-            {results.rawScore}/{SECTION_QUESTION_COUNT}
+            {results.rawScore}/{totalQuestions}
           </p>
           <p className="text-xs text-muted-foreground mt-1">questions correct</p>
           <div className="mt-3 h-2 rounded-full bg-muted overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all ${results.passed ? "bg-green-500" : "bg-red-500"}`}
+              className={`h-full rounded-full transition-all ${barColor}`}
               style={{ width: `${(results.scaledScore / 99) * 100}%` }}
             />
           </div>
         </motion.div>
+
+        {results.isSample && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.5 }}
+            className="mt-6 flex flex-col items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 p-5 text-center sm:flex-row sm:text-left"
+          >
+            <p className="flex-1 text-sm">
+              This is a short sample. Full-length timed mock exams are included in Pro.
+            </p>
+            <Link
+              href={PRICING_PATH}
+              className="shrink-0 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+            >
+              View Plans
+            </Link>
+          </motion.div>
+        )}
 
         <motion.div
           initial={{ opacity: 0 }}
@@ -151,6 +169,9 @@ export default function CpaExamResultsPage() {
             <ArrowRight className="h-4 w-4" />
           </button>
         </motion.div>
+
+        {/* Loaded after the score; the review API only answers for submitted attempts. */}
+        <ExamReviewSection attemptId={params.attemptId} />
       </div>
     </div>
   );

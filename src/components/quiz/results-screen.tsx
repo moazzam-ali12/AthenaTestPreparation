@@ -1,6 +1,8 @@
 "use client";
 
+import { useMemo } from "react";
 import { motion } from "framer-motion";
+import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ReviewItem } from "./review-item";
@@ -9,6 +11,7 @@ import type { Problem } from "./types";
 type ResultsScreenProps = {
   problems: Problem[];
   answers: Map<string, number>;
+  wrongCounts: Map<string, number>;
   score: number;
   elapsed: number;
   onRetry: () => void;
@@ -20,6 +23,7 @@ type ResultsScreenProps = {
 export function ResultsScreen({
   problems,
   answers,
+  wrongCounts,
   score,
   elapsed,
   onRetry,
@@ -29,6 +33,33 @@ export function ResultsScreen({
 }: ResultsScreenProps) {
   const total = problems.length;
   const pct = Math.round((score / total) * 100);
+
+  // Weak = skipped/missed (no answer or -1) OR answered but struggled first
+  // (wrong_count > 0). Aggregate by conceptTags, fallback to difficulty. The
+  // two buckets are tracked separately so counts stay distinguishable.
+  const weakAreas = useMemo(() => {
+    const counts = new Map<string, { skipped: number; struggled: number }>();
+    for (const p of problems) {
+      const sel = answers.get(p.id);
+      const skipped = sel === undefined || sel === -1;
+      const struggled = !skipped && (wrongCounts.get(p.id) ?? 0) > 0;
+      if (!skipped && !struggled) continue;
+      const labels =
+        p.conceptTags && p.conceptTags.length > 0
+          ? p.conceptTags
+          : [`${p.difficulty} problems`];
+      for (const l of labels) {
+        const c = counts.get(l) ?? { skipped: 0, struggled: 0 };
+        if (skipped) c.skipped += 1;
+        else c.struggled += 1;
+        counts.set(l, c);
+      }
+    }
+    return [...counts.entries()]
+      .map(([label, c]) => ({ label, ...c, total: c.skipped + c.struggled }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 6);
+  }, [problems, answers, wrongCounts]);
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60);
@@ -91,6 +122,60 @@ export function ResultsScreen({
 
       {/* Question review list */}
       <div className="flex-1 overflow-y-auto p-6">
+        {weakAreas.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-6 rounded-lg border border-destructive/20 bg-destructive/5 p-4"
+          >
+            <div className="mb-3 flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-destructive" />
+              <h3 className="text-sm font-semibold">Weak Areas</h3>
+              <span className="text-xs text-muted-foreground">
+                Concepts to review
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {weakAreas.map(({ label, skipped, struggled }) => (
+                <span
+                  key={label}
+                  className="flex items-center gap-1.5 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium capitalize text-destructive"
+                >
+                  {label.replace(/-/g, " ")}
+                  {struggled > 0 && (
+                    <span
+                      title="Struggled before solving"
+                      className="rounded-full bg-destructive/20 px-1.5 text-[10px] font-bold"
+                    >
+                      {struggled}
+                    </span>
+                  )}
+                  {skipped > 0 && (
+                    <span
+                      title="Skipped / missed"
+                      className="rounded-full bg-muted px-1.5 text-[10px] font-bold text-muted-foreground"
+                    >
+                      {skipped}
+                    </span>
+                  )}
+                </span>
+              ))}
+            </div>
+            <div className="mt-2 flex items-center gap-3 text-[10px] text-muted-foreground">
+              <span className="flex items-center gap-1">
+                <span className="rounded-full bg-destructive/20 px-1.5 font-bold text-destructive">
+                  #
+                </span>
+                struggled
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="rounded-full bg-muted px-1.5 font-bold">#</span>
+                skipped
+              </span>
+            </div>
+          </motion.div>
+        )}
+
         <h3 className="mb-4 text-lg font-semibold">Question Review</h3>
         <div className="space-y-4">
           {problems.map((problem, i) => (

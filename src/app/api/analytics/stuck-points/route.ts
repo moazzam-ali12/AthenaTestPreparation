@@ -1,6 +1,6 @@
 import { auth } from "@clerk/nextjs/server";
 import { getUserByClerkId } from "@/lib/db/queries/users";
-import { getStuckPoints } from "@/lib/db/queries/analytics";
+import { getStuckPoints, getWeakConcepts } from "@/lib/db/queries/analytics";
 import { NextResponse } from "next/server";
 
 export async function GET() {
@@ -14,13 +14,18 @@ export async function GET() {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
 
-  const stuckPoints = await getStuckPoints(user.id);
+  const [stuckPoints, weakConcepts] = await Promise.all([
+    getStuckPoints(user.id),
+    getWeakConcepts(user.id),
+  ]);
 
   const stuckThreshold = 3;
   const strongThreshold = 80;
 
   return NextResponse.json({
     stuckPoints,
+    weakConcepts: weakConcepts.concepts,
+    totalMissedQuestions: weakConcepts.totalMissed,
     summary: {
       totalSubtopicsAttempted: stuckPoints.length,
       stuckCount: stuckPoints.filter((s) => s.stuckScore > stuckThreshold).length,

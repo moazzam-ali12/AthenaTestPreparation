@@ -7,8 +7,10 @@ import {
   composeDailyQuestBuckets,
   distributeQuestQuestions,
 } from "@/lib/adaptive/engine";
+import { getCurriculumLockMap } from "@/lib/db/queries/next-lesson";
+import { getOverallLevel } from "@/lib/adaptive/overall-level";
 import { supabase } from "@/lib/supabase/client";
-import type { SubsectionSkill } from "@/types/adaptive";
+import type { CpaSection } from "@/types/cpa-exam";
 
 /**
  * Generates a daily quest for a user on a given date.
@@ -31,22 +33,43 @@ export async function generateQuestForDate(
   if (existing) return null; // Already exists
 
   // Get or initialize subsection skills
-  let skills = await getAllSubsectionSkills(userId);
-  if (skills.length === 0) {
-    skills = await initializeAllSkills(userId);
+  let allSkills = await getAllSubsectionSkills(userId);
+  if (allSkills.length === 0) {
+    allSkills = await initializeAllSkills(userId);
   }
+
+  // Skill rows exist for every subtopic in all 6 sections. Only quiz the
+  // candidate on subtopics the curriculum lock map has unlocked (or they've
+  // already practiced) — the same map as the learning hub and quiz. With
+  // CROSS_SECTION_LOCK=true that is AUD/FAR/REG + chosen discipline only;
+  // with false, every section's own chain counts.
+  const [{ data: userRow }, overallLevel] = await Promise.all([
+    supabase
+      .from("users")
+      .select("target_discipline_section")
+      .eq("id", userId)
+      .maybeSingle(),
+    getOverallLevel(userId),
+  ]);
+  const lockMap = await getCurriculumLockMap(
+    userId,
+    (userRow?.target_discipline_section as CpaSection | null) ?? null
+  );
+  const skills = allSkills.filter(
+    (s) =>
+      lockMap.has(s.subtopicId) &&
+      (lockMap.get(s.subtopicId) === false || s.totalAttempts > 0)
+  );
   if (skills.length === 0) return null;
 
   // Fetch recent quest performance (last 5 quests) to boost weak subtopics
   const recentPerformance = await getRecentQuestPerformance(userId);
-
-  // Adjust skills based on recent quest performance
-  const adjustedSkills = applyRecentPerformanceWeights(skills, recentPerformance);
+  const sortAdjust = getRecentPerformanceSortAdjust(recentPerformance);
 
   // Get bucket assignments and question distribution. CPA has no composite
   // score, so difficulty is driven purely by each subsection's own mastery
   // level (no global difficulty floor).
-  const buckets = composeDailyQuestBuckets(adjustedSkills);
+  const buckets = composeDailyQuestBuckets(skills, sortAdjust, overallLevel);
   const distribution = distributeQuestQuestions(buckets, 20);
 
   // Fetch recently answered problem IDs to avoid repeats (last 200)
@@ -55,6 +78,7 @@ export async function generateQuestForDate(
     .select("problem_id, daily_quests!inner(user_id)")
     .eq("daily_quests.user_id", userId)
     .not("is_correct", "is", null)
+    .order("answered_at", { ascending: false })
     .limit(200);
 
   const recentProblemIds = new Set(
@@ -66,6 +90,7 @@ export async function generateQuestForDate(
     .from("quiz_answers")
     .select("problem_id, quiz_sessions!inner(user_id)")
     .eq("quiz_sessions.user_id", userId)
+    .order("created_at", { ascending: false })
     .limit(200);
 
   for (const a of quizAnswers ?? []) {
@@ -101,6 +126,7 @@ export async function generateQuestForDate(
         .from("problems")
         .select("id, difficulty_level")
         .eq("source", "cpa")
+        .eq("status", "approved")
         .eq("subtopic_id", entry.subtopicId)
         .gte("difficulty_level", minDiff)
         .lte("difficulty_level", maxDiff)
@@ -205,36 +231,29 @@ async function getRecentQuestPerformance(
 }
 
 /**
- * Adjusts subsection skills to weight struggling subtopics lower (so they sort
- * toward the "weak" end of the bucket assignment). Subtopics with low recent
- * quest accuracy get their effective level reduced for sorting purposes.
+ * Per-subtopic offsets that move struggling subtopics toward the "weak" end of
+ * the bucket ordering. Used for sorting only — difficulty still comes from the
+ * subtopic's real skill level, so a bad recent quest doesn't also make every
+ * question easier.
  */
-function applyRecentPerformanceWeights(
-  skills: SubsectionSkill[],
+function getRecentPerformanceSortAdjust(
   recentPerformance: SubtopicPerformance[]
-): SubsectionSkill[] {
-  if (recentPerformance.length === 0) return skills;
+): Map<string, number> {
+  const adjust = new Map<string, number>();
 
-  const perfMap = new Map(recentPerformance.map((p) => [p.subtopicId, p]));
+  for (const perf of recentPerformance) {
+    if (perf.totalAnswered < 2) continue;
 
-  return skills.map((skill) => {
-    const perf = perfMap.get(skill.subtopicId);
-    if (!perf || perf.totalAnswered < 2) return skill;
-
-    // Low accuracy in recent quests -> reduce effective level so it gets prioritized
-    // as "weak". High accuracy -> slight boost so it moves toward "mid"/"stretch".
-    let levelAdjust = 0;
     if (perf.accuracy < 0.4) {
-      levelAdjust = -2; // Struggling hard -> push to weak
+      adjust.set(perf.subtopicId, -2); // Struggling hard -> push to weak
     } else if (perf.accuracy < 0.6) {
-      levelAdjust = -1; // Below average -> nudge toward weak
+      adjust.set(perf.subtopicId, -1); // Below average -> nudge toward weak
     } else if (perf.accuracy >= 0.9 && perf.totalAnswered >= 3) {
-      levelAdjust = 1; // Mastering -> push toward stretch
+      adjust.set(perf.subtopicId, 1); // Mastering -> push toward stretch
     }
+  }
 
-    const adjustedLevel = Math.max(1, Math.min(10, skill.level + levelAdjust));
-    return { ...skill, level: adjustedLevel };
-  });
+  return adjust;
 }
 
 // --- Quest creation with explicit date ---

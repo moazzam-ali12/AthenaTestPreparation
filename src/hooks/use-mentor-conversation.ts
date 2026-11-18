@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useAudioAnalyzer } from "./use-audio-analyzer";
 import { sanitizeForTTS } from "@/lib/sanitize-for-tts";
 import type { WhiteboardStep } from "@/types/whiteboard";
@@ -33,7 +33,7 @@ function base64ToUint8Array(base64: string): Uint8Array {
   return bytes;
 }
 
-export function useMentorConversation() {
+export function useMentorConversation(userId?: string | null) {
   const [messages, setMessages] = useState<MentorMessage[]>([]);
   const [mode, setMode] = useState<Mode>("text");
   const [isRecording, setIsRecording] = useState(false);
@@ -44,6 +44,37 @@ export function useMentorConversation() {
 
   const messagesRef = useRef<MentorMessage[]>([]);
   messagesRef.current = messages;
+
+  // Per-user chat persistence (survives refresh + new tabs). Hydrate once when
+  // the user id resolves; guard saves until after hydration so the initial
+  // empty state can't clobber stored history.
+  const storageKey = userId ? `athena_chat_${userId}` : null;
+  const hydratedRef = useRef(false);
+
+  useEffect(() => {
+    if (!storageKey || hydratedRef.current) return;
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw) {
+        const saved = JSON.parse(raw) as MentorMessage[];
+        if (Array.isArray(saved) && saved.length) setMessages(saved);
+      }
+    } catch {
+      // corrupt/unavailable storage — start fresh
+    }
+    hydratedRef.current = true;
+  }, [storageKey]);
+
+  useEffect(() => {
+    if (!storageKey || !hydratedRef.current) return;
+    try {
+      // Strip transient streaming flags so a reload never restores a stuck bubble.
+      const persistable = messages.map(({ role, content }) => ({ role, content }));
+      localStorage.setItem(storageKey, JSON.stringify(persistable));
+    } catch {
+      // storage full/unavailable — non-fatal
+    }
+  }, [messages, storageKey]);
 
   const nextStepIdRef = useRef(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -670,7 +701,10 @@ export function useMentorConversation() {
     setMessages([]);
     setWhiteboardSteps([]);
     nextStepIdRef.current = 0;
-  }, []);
+    if (storageKey) {
+      try { localStorage.removeItem(storageKey); } catch { /* ignore */ }
+    }
+  }, [storageKey]);
 
   const toggleMode = useCallback(() => {
     stopNarration();

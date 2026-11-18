@@ -4,9 +4,15 @@ import { supabase } from "@/lib/supabase/client";
 import { getUserByClerkId } from "@/lib/db/queries/users";
 import { getSubtopicAccuracy } from "@/lib/db/queries/analytics";
 import { getCurriculumLockMap } from "@/lib/db/queries/next-lesson";
+import { selectQuizProblems } from "@/lib/adaptive/quiz-selection";
+import { getFeatureTier } from "@/lib/subscription";
+import { getConsumedItemIds } from "@/lib/db/queries/trial";
+import { MCQ_PER_SECTION } from "@/lib/trial";
+import { trialLimitResponse } from "@/lib/trial-gate";
+import { isCpaSubject } from "@/types/cpa-exam";
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ topicSlug: string; subtopicSlug: string }> }
 ) {
   const { userId: clerkId } = await auth();
@@ -52,31 +58,80 @@ export async function GET(
     );
   }
 
-  const subtopicStats = await getSubtopicAccuracy(user.id, subtopic.id);
+  const [subtopicStats, { data: problemsData }, { count: attemptNumber }] = await Promise.all([
+    getSubtopicAccuracy(user.id, subtopic.id),
+    (supabase as any)
+      .from("problems")
+      .select("id, order_index, difficulty, difficulty_level, question_text, options, time_recommendation_seconds, concept_tags")
+      .eq("source", "cpa")
+      .eq("status", "approved")
+      .eq("subtopic_id", subtopic.id)
+      .order("order_index", { ascending: true }) as Promise<{ data: any[] | null }>,
+    supabase
+      .from("quiz_sessions")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .eq("subtopic_id", subtopic.id),
+  ]);
   const struggling = subtopicStats.totalAttempts >= 3 && subtopicStats.accuracy < 50;
 
-  const { data: problemsData } = await (supabase as any)
-    .from("problems")
-    .select("id, order_index, difficulty, difficulty_level, question_text, options, correct_option, explanation, solution_steps, hint, detailed_hint, time_recommendation_seconds, concept_tags, option_hints")
-    .eq("source", "cpa")
-    .eq("subtopic_id", subtopic.id)
-    .order("order_index", { ascending: true }) as { data: any[] | null };
+  // 20 questions ramping easy -> hard, a fresh draw per attempt (the seed
+  // changes once a quiz is submitted) but stable within one attempt.
+  const quizProblems = selectQuizProblems(
+    problemsData ?? [],
+    `${user.id}:${subtopic.id}:${attemptNumber ?? 0}`
+  );
 
-  const problems = (problemsData ?? []).map((p) => ({
+  // Free trial: only `?mode=quiz` (the quiz itself) serves question content.
+  // Nothing is consumed here — an MCQ counts against the per-section quota on
+  // its first answer (POST /api/act-quiz/answer). The payload is capped to the
+  // already-counted MCQs plus as many new ones as the section has left.
+  const isTrial = getFeatureTier(user) !== "pro";
+  const section = isCpaSubject(topic.subject) ? topic.subject : null;
+  let servedProblems = quizProblems;
+  // Trial quiz length shown on the overview card: what `?mode=quiz` would serve
+  // (counted MCQs + remaining section quota), not the full Pro quiz length.
+  let trialQuestionCount = quizProblems.length;
+  if (isTrial) {
+    const quizMode = new URL(req.url).searchParams.get("mode") === "quiz";
+    if (!section) {
+      servedProblems = [];
+    } else {
+      const counted = await getConsumedItemIds(user.id, "mcq", section);
+      let newLeft = Math.max(MCQ_PER_SECTION - counted.size, 0);
+      const allowed = quizProblems.filter((p) => {
+        if (counted.has(p.id)) return true;
+        if (newLeft === 0) return false;
+        newLeft--;
+        return true;
+      });
+      // Quota used up and this draw had no counted MCQs: re-serve the ones the
+      // user already answered in this subtopic instead of an empty quiz.
+      if (allowed.length === 0) {
+        allowed.push(...(problemsData ?? []).filter((p) => counted.has(p.id)));
+      }
+      // Quota exhausted: keep the card's count; opening the quiz shows the upgrade modal.
+      if (allowed.length > 0) trialQuestionCount = allowed.length;
+      if (!quizMode) {
+        servedProblems = [];
+      } else {
+        if (allowed.length === 0) return trialLimitResponse("mcq", section);
+        servedProblems = allowed;
+      }
+    }
+  }
+
+  // No answer key, solution or hints while the quiz is in progress (all
+  // tiers): they come back per question from POST /api/act-quiz/answer.
+  const problems = servedProblems.map((p) => ({
     id: p.id,
     orderIndex: p.order_index,
     difficulty: p.difficulty,
     difficultyLevel: p.difficulty_level,
     questionText: p.question_text,
     options: p.options,
-    correctOption: p.correct_option,
-    explanation: p.explanation,
-    solutionSteps: p.solution_steps,
-    hint: p.hint,
-    detailedHint: p.detailed_hint ?? undefined,
     timeRecommendationSeconds: p.time_recommendation_seconds,
     conceptTags: p.concept_tags ?? [],
-    optionHints: p.option_hints ?? [],
   }));
 
   return NextResponse.json({
@@ -95,6 +150,8 @@ export async function GET(
       conceptualOverview: subtopic.conceptual_overview,
     },
     problems,
+    // Trial users see the quiz's question count without its content.
+    questionCount: isTrial ? trialQuestionCount : problems.length,
     struggling,
   });
 }

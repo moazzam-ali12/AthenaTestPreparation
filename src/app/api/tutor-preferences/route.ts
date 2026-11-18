@@ -11,6 +11,7 @@ import {
   upsertUserPreferences,
 } from "@/lib/db/queries/preferences";
 import { isTutorCharacterId } from "@/lib/tutor-characters";
+import { isTutorMode, type TutorMode } from "@/lib/tutor-modes";
 
 export async function GET() {
   const { userId } = await auth();
@@ -21,12 +22,13 @@ export async function GET() {
   if (!user) {
     // Provider treats 404 the same as no preference — falls back to
     // localStorage / app defaults. Don't 500 the unsigned-in path.
-    return NextResponse.json({ characterId: null, voiceId: null });
+    return NextResponse.json({ characterId: null, voiceId: null, tutorMode: null });
   }
   const prefs = await getUserPreferences(user.id);
   return NextResponse.json({
     characterId: prefs?.tutorCharacterId ?? null,
     voiceId: prefs?.tutorVoiceId ?? null,
+    tutorMode: prefs?.tutorMode ?? null,
   });
 }
 
@@ -40,14 +42,14 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
 
-  let body: { characterId?: unknown; voiceId?: unknown };
+  let body: { characterId?: unknown; voiceId?: unknown; tutorMode?: unknown };
   try {
-    body = (await req.json()) as { characterId?: unknown; voiceId?: unknown };
+    body = (await req.json()) as { characterId?: unknown; voiceId?: unknown; tutorMode?: unknown };
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const update: { tutorCharacterId?: string | null; tutorVoiceId?: string | null } = {};
+  const update: { tutorCharacterId?: string | null; tutorVoiceId?: string | null; tutorMode?: TutorMode | null } = {};
   if (body.characterId !== undefined) {
     if (body.characterId === null) {
       update.tutorCharacterId = null;
@@ -70,6 +72,12 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: "Invalid voiceId" }, { status: 400 });
     }
   }
+  if (body.tutorMode !== undefined) {
+    if (body.tutorMode !== null && !isTutorMode(body.tutorMode)) {
+      return NextResponse.json({ error: "Invalid tutorMode" }, { status: 400 });
+    }
+    update.tutorMode = body.tutorMode;
+  }
   if (Object.keys(update).length === 0) {
     return NextResponse.json({ ok: true, noChange: true });
   }
@@ -79,5 +87,6 @@ export async function PUT(req: Request) {
     ok: true,
     characterId: prefs?.tutorCharacterId ?? null,
     voiceId: prefs?.tutorVoiceId ?? null,
+    tutorMode: prefs?.tutorMode ?? null,
   });
 }
