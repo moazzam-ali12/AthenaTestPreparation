@@ -1,5 +1,8 @@
 import { auth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
+import { track } from "@/lib/analytics";
+import { getUserByClerkId } from "@/lib/db/queries/users";
+import { chargeTutorMessage, refundOnStreamError } from "@/lib/tutor-cap";
 
 const AGENT_URL = process.env.AGENT_SERVICE_URL || "http://localhost:8080";
 
@@ -23,6 +26,18 @@ export async function POST(req: Request) {
     );
   }
 
+  // Trial daily cap: charge before the LLM call; refunded below if it fails.
+  let charge: Awaited<ReturnType<typeof chargeTutorMessage>>;
+  try {
+    const user = await getUserByClerkId(userId);
+    if (user) track("tutor_used", { surface: "lesson" }, user.id);
+    charge = await chargeTutorMessage(user);
+  } catch (err) {
+    console.error("[agent/chat/stream] tutor cap check failed:", err);
+    return NextResponse.json({ error: "AI tutor is currently unavailable. Please try again later." }, { status: 503 });
+  }
+  if (charge.blocked) return charge.blocked;
+
   try {
     const res = await fetch(`${AGENT_URL}/chat/stream`, {
       method: "POST",
@@ -40,7 +55,7 @@ export async function POST(req: Request) {
       throw new Error(`Agent service returned ${res.status}: ${errorBody}`);
     }
 
-    return new Response(res.body, {
+    return new Response(refundOnStreamError(res.body, charge.refund), {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
@@ -49,6 +64,7 @@ export async function POST(req: Request) {
     });
   } catch (err) {
     console.error("[agent/chat/stream] Error:", err);
+    await charge.refund();
     return NextResponse.json(
       { error: "AI tutor is currently unavailable. Please try again later." },
       { status: 503 }

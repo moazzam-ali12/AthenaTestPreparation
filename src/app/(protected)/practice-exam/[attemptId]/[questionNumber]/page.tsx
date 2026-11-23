@@ -71,7 +71,11 @@ export default function CpaExamQuestionPage() {
         hasAnswers={ctx.answeredCount > 0}
         subtopicName={`${ctx.test.section} - ${moduleLabel}`}
         showCalc
-        title={`${ctx.test.section} Practice Exam`}
+        title={
+          ctx.attempt.isSample
+            ? `Sample test · ${ctx.totalQuestions} questions · ${ctx.durationMinutes} min`
+            : `${ctx.test.section} Practice Exam`
+        }
       />
 
       <SegmentProgressBar

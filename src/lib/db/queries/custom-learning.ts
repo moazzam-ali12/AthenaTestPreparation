@@ -113,6 +113,23 @@ export async function getCustomTopicWithQuestions(
   return { topic: mappedTopic, questions };
 }
 
+type CustomQuestionRow = NonNullable<Awaited<ReturnType<typeof getCustomTopicWithQuestions>>>["questions"][number];
+
+/** The answer-revealing part of a custom question (sent only after it's answered, or after submit). */
+export function customQuestionReveal(q: CustomQuestionRow) {
+  return {
+    correctOption: q.correctOption as number,
+    explanation: (q.explanation ?? "") as string,
+    solutionSteps: (q.solutionSteps ?? []) as { step: number; instruction: string; math: string }[],
+    hint: (q.hint ?? "") as string,
+  };
+}
+
+/** A custom question without its key, solution or hint — safe for an in-progress quiz. */
+export function redactCustomQuestion({ correctOption: _c, explanation: _e, solutionSteps: _s, hint: _h, ...rest }: CustomQuestionRow) {
+  return rest;
+}
+
 export async function getUserCustomTopics(userId: string) {
   const { data } = await supabase
     .from("custom_topics")

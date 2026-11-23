@@ -7,6 +7,7 @@ import type { useQuizState } from "./use-quiz-state";
 import type { useQuizTimer } from "./use-quiz-timer";
 import type { Badge } from "@/lib/badges";
 import type { RankUp } from "@/lib/gamification/check-unlocks";
+import type { CpaSubject } from "@/types/cpa-exam";
 
 export type UnlockData = { newBadges: Badge[]; rankUp: RankUp | null };
 
@@ -14,7 +15,8 @@ export type QuizRouteContextValue = {
   problems: Problem[];
   topicName: string;
   subtopicName: string;
-  subject?: "math" | "english" | "reading" | "science";
+  subject?: CpaSubject;
+  subtopicId?: string;
   struggling: boolean;
   basePath: string;
   practiceProblemsUrl?: string;

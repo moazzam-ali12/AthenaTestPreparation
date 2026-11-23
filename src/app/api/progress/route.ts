@@ -3,7 +3,12 @@ import { getUserByClerkId } from "@/lib/db/queries/users";
 import { getProgressData } from "@/lib/db/queries/progress";
 import { getAllSubsectionSkills } from "@/lib/db/queries/subsection-skills";
 import { getAllSectionProgress } from "@/lib/db/queries/cpa-exam";
-import { CPA_CORE_SECTIONS } from "@/types/cpa-exam";
+import {
+  getOverallLevel,
+  getRelevantSections,
+  getSubtopicCountsBySection,
+} from "@/lib/adaptive/overall-level";
+import { getTbsProgress } from "@/lib/db/queries/tbs";
 import { NextResponse } from "next/server";
 
 export async function GET() {
@@ -17,17 +22,22 @@ export async function GET() {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
 
-  const [data, subsectionSkills, sectionProgress] = await Promise.all([
+  const [data, subsectionSkills, sectionProgress, overallLevel, subtopicCounts, tbsProgress] = await Promise.all([
     getProgressData(user.id),
     getAllSubsectionSkills(user.id),
     getAllSectionProgress(user.id),
+    getOverallLevel(user.id),
+    getSubtopicCountsBySection(),
+    // Never fails the whole page (e.g. before the TBS migration is applied).
+    getTbsProgress(user.id).catch((e) => {
+      console.error("TBS progress failed:", e);
+      return [];
+    }),
   ]);
 
   // Sections that count toward this candidate: the 3 mandatory core
   // sections plus their chosen discipline section (once picked).
-  const relevantSections = user.targetDisciplineSection
-    ? [...CPA_CORE_SECTIONS, user.targetDisciplineSection]
-    : CPA_CORE_SECTIONS;
+  const relevantSections = getRelevantSections(user.targetDisciplineSection ?? null);
   const sectionsPassed = sectionProgress.filter(
     (s) => relevantSections.includes(s.section) && s.passed
   ).length;
@@ -43,5 +53,9 @@ export async function GET() {
     sectionsTotal: relevantSections.length,
     ...data,
     subsectionSkills,
+    overallLevel,
+    relevantSections,
+    subtopicCounts,
+    tbsProgress,
   });
 }

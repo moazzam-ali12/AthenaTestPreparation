@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
@@ -8,6 +9,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Clock, Target, Lock } from "lucide-react";
 import { getTopicIcon } from "@/lib/topic-icons";
 import { cn } from "@/lib/utils";
+import { useAccess, useTrialUsage } from "@/hooks/use-trial";
+import { MCQ_PER_SECTION } from "@/lib/trial";
+import { isCpaSubject } from "@/types/cpa-exam";
+import { TbsList } from "@/components/tbs/tbs-list";
 
 type Topic = {
   id: string;
@@ -31,7 +36,22 @@ const SUBJECTS = [
 ] as const;
 
 export default function LearningPage() {
-  const [activeSubject, setActiveSubject] = useState<string>("aud");
+  return (
+    <Suspense fallback={null}>
+      <LearningPageInner />
+    </Suspense>
+  );
+}
+
+function LearningPageInner() {
+  // Deep links like /learning?section=far#simulations (e.g. "Try another").
+  const sectionParam = useSearchParams().get("section");
+  const [activeSubject, setActiveSubject] = useState<string>(
+    isCpaSubject(sectionParam) ? sectionParam : "aud"
+  );
+  const { tier } = useAccess();
+  const { data: trial } = useTrialUsage();
+  const mcqUsed = isCpaSubject(activeSubject) ? (trial?.usage.mcq[activeSubject] ?? 0) : 0;
 
   const {
     data,
@@ -92,6 +112,13 @@ export default function LearningPage() {
           </button>
         ))}
       </div>
+
+      {tier === "trial" && (
+        <p className="mb-4 text-xs text-muted-foreground">
+          Free trial: {Math.min(mcqUsed, MCQ_PER_SECTION)} / {MCQ_PER_SECTION} free questions used in{" "}
+          {activeSubject.toUpperCase()}
+        </p>
+      )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {filteredTopics.map((topic) => {
@@ -164,6 +191,8 @@ export default function LearningPage() {
           No topics available yet for this subject.
         </p>
       )}
+
+      {isCpaSubject(activeSubject) && <TbsList section={activeSubject} />}
     </div>
   );
 }

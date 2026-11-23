@@ -31,6 +31,10 @@ from app.pre_generation.problem_generator import generate_problems_batch
 
 load_dotenv(Path(__file__).parent / ".env")
 
+from app.utils.sentry import environment as sentry_environment, init_sentry
+
+init_sentry()  # no-op without SENTRY_DSN; must run before the FastAPI app is created
+
 from app.cron.session_reminders import session_reminder_loop
 
 
@@ -50,6 +54,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/debug/sentry")
+async def debug_sentry():
+    """Throws so the error reaches Sentry. Disabled in production."""
+    if sentry_environment() == "production":
+        raise HTTPException(status_code=404, detail="Not found")
+    raise RuntimeError("Sentry test error from agents backend")
+
 
 WHITEBOARD_DELIMITER = "<<<WHITEBOARD>>>"
 
@@ -86,7 +98,10 @@ class QuizChatRequest(BaseModel):
     solution_steps: list[dict]
     correct_option: int
     student_answer: int | None = None
+    mode: str = "hint"  # hint | guided | full | why_wrong (quiz tutor only)
     history: list[QuizChatMessage] = []
+    skill_level: str | None = None
+    performance_summary: str | None = None
 
 
 async def stream_with_whiteboard(
@@ -297,6 +312,9 @@ async def quiz_chat_stream_endpoint(req: QuizChatRequest):
                 correct_option=req.correct_option,
                 student_answer=req.student_answer,
                 history=history,
+                skill_level=req.skill_level,
+                performance_summary=req.performance_summary,
+                mode=req.mode,
             )
             async for event in stream_with_whiteboard(raw):
                 yield event
@@ -578,26 +596,44 @@ async def my_learning_generate_endpoint(req: MyLearningRequest):
 class PracticeProblemsRequest(BaseModel):
     topic: str
     subtopic: str
-    subject: str = "math"
+    # CPA section code (aud/far/reg/bar/isc/tcp). Required: an unknown subject
+    # used to fall back silently to AUD.
+    subject: str
+    difficulty: str | None = None
+
+
+# Generate one spare so answer-key verification can drop a disputed problem
+# and still leave the 2 the UI shows.
+PRACTICE_SERVED = 2
+PRACTICE_GENERATED = 3
 
 
 @app.post("/practice-problems")
 async def practice_problems_endpoint(req: PracticeProblemsRequest):
     try:
         import random
-        difficulty = random.choice(["easy", "medium", "hard"])
+        import uuid
+        # Honor a caller-supplied difficulty (skill-targeted practice). With
+        # no signal, medium is the safest default — a random band could hand a
+        # struggling candidate hard questions.
+        difficulty = req.difficulty if req.difficulty in ("easy", "medium", "hard") else "medium"
         problems = await generate_problems_batch(
             subtopic_name=req.subtopic,
             topic_name=req.topic,
             subtopic_id="practice",
-            batch_number=0,
+            # Random batch number rotates the problem-type focus between calls.
+            batch_number=random.randrange(1000),
             difficulty=difficulty,
-            batch_size=2,
+            batch_size=PRACTICE_GENERATED,
             subject=req.subject,
+            verify=True,
         )
+        problems = problems[:PRACTICE_SERVED]
         return {"problems": [
             {
-                "id": f"practice-{i}",
+                # Unique per call: fixed "practice-0/1" ids collided across
+                # requests in React keys and event tracking.
+                "id": f"practice-{uuid.uuid4()}",
                 "questionText": p["question_text"],
                 "options": p["options"],
                 "correctOption": p["correct_option"],
@@ -678,6 +714,94 @@ Respond with ONLY valid JSON, no markdown fences."""
         return result
     except (json.JSONDecodeError, IndexError) as e:
         raise HTTPException(status_code=500, detail=f"Failed to parse AI response: {e}")
+
+
+class LearningSummaryFocusArea(BaseModel):
+    subtopic_name: str
+    accuracy: int
+    recommendation: str
+
+
+class LearningSummaryStrength(BaseModel):
+    subtopic_name: str
+    accuracy: int
+
+
+class LearningSummarySubsection(BaseModel):
+    subsection: str
+    accuracy: int
+    attempts: int
+
+
+class LearningSummaryNarrativeRequest(BaseModel):
+    """Structured facts about a learner's progress. The LLM only turns these into
+    warm prose — it must not invent stats or recommendations, which stay
+    deterministic on the app side (focus_area/strength drive the CTAs)."""
+
+    overall_accuracy: int
+    trend: str  # "improving" | "stable" | "declining"
+    subtopics_attempted: int
+    focus_area: LearningSummaryFocusArea | None = None
+    strength: LearningSummaryStrength | None = None
+    subsection_accuracy: list[LearningSummarySubsection] = []
+
+
+@app.post("/learning-summary")
+async def learning_summary_endpoint(req: LearningSummaryNarrativeRequest):
+    """Synthesize a personalized progress narrative from pre-computed stats.
+
+    Returns {headline, narrative[]}. The caller merges this over its deterministic
+    summary, so if this fails the app still shows the template version."""
+    import anthropic
+
+    strength_ctx = (
+        f"\n- Clear strength: {req.strength.subtopic_name} at {req.strength.accuracy}% accuracy."
+        if req.strength
+        else ""
+    )
+    focus_ctx = (
+        f"\n- Best next focus: {req.focus_area.subtopic_name} at {req.focus_area.accuracy}% (suggested action: {req.focus_area.recommendation})."
+        if req.focus_area
+        else "\n- No clear weak spot right now."
+    )
+    subsection_ctx = ""
+    if req.subsection_accuracy:
+        lines = "; ".join(
+            f"{s.subsection} {s.accuracy}% ({s.attempts} attempts)"
+            for s in req.subsection_accuracy[:6]
+        )
+        subsection_ctx = f"\n- Per-subsection accuracy: {lines}."
+
+    prompt = f"""You are Athena, a warm, direct CPA study coach. Here are a learner's current stats:
+- Overall accuracy: {req.overall_accuracy}% across {req.subtopics_attempted} subsection(s).
+- Recent trend: {req.trend}.{strength_ctx}{focus_ctx}{subsection_ctx}
+
+Write a short, personalized read of where they stand as JSON with these fields:
+- headline: a punchy 3-6 word status line (e.g. "You're trending upward").
+- narrative: an array of 2-3 sentences, addressed to "you", that interpret the stats above. Reference the specific subsection names and numbers provided. If there's a focus area, motivate the suggested action naturally without over-explaining it.
+
+Rules: Only use the numbers and topics given above — never invent stats, topics, or recommendations. Keep the whole thing under 70 words. Encouraging but not saccharine.
+
+Respond with ONLY valid JSON, no markdown fences."""
+
+    client = anthropic.Anthropic()
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=300,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    try:
+        result = json.loads(message.content[0].text)
+    except (json.JSONDecodeError, IndexError) as e:
+        raise HTTPException(status_code=500, detail=f"Failed to parse AI response: {e}")
+
+    headline = result.get("headline")
+    narrative = result.get("narrative")
+    if not isinstance(headline, str) or not isinstance(narrative, list):
+        raise HTTPException(status_code=500, detail="AI response missing required fields")
+
+    return {"headline": headline, "narrative": [str(n) for n in narrative]}
 
 
 if __name__ == "__main__":

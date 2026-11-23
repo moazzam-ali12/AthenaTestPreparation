@@ -29,8 +29,12 @@ type StuckPoint = {
   recommendation: "micro-lesson" | "practice" | "review-quiz";
 };
 
+type WeakConcept = { tag: string; missCount: number; struggled: number };
+
 type ReviewData = {
   stuckPoints: StuckPoint[];
+  weakConcepts: WeakConcept[];
+  totalMissedQuestions: number;
   summary: {
     totalSubtopicsAttempted: number;
     stuckCount: number;
@@ -163,7 +167,11 @@ export default function ReviewPage() {
   }, [isError]);
 
   const stuckPoints = data?.stuckPoints ?? [];
+  const weakConcepts = data?.weakConcepts ?? [];
   const summary = data?.summary;
+
+  // "Weak Areas" chips cover both buckets (missed + struggled), top 6.
+  const weakAreas = weakConcepts.slice(0, 6);
 
   const weakTopics = stuckPoints.filter((p) => p.stuckScore > 3);
   const needsAttention = stuckPoints.filter(
@@ -238,6 +246,57 @@ export default function ReviewPage() {
               );
             })}
           </div>
+        )}
+
+        {/* Weak Areas — concept chips split into missed vs. struggled buckets */}
+        {weakAreas.length > 0 && (
+          <section className="mb-8">
+            <div className="flex items-center gap-2 mb-4">
+              <AlertTriangle className="h-4 w-4 text-destructive" />
+              <h2 className="font-semibold">Weak Areas</h2>
+              <span className="text-xs text-muted-foreground">Concepts to review</span>
+            </div>
+            <div className="rounded-xl border bg-card p-4">
+              <div className="flex flex-wrap gap-1.5">
+                {weakAreas.map((c) => (
+                  <span
+                    key={c.tag}
+                    className="flex items-center gap-1.5 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium capitalize text-destructive"
+                  >
+                    {c.tag.replace(/-/g, " ")}
+                    {c.struggled > 0 && (
+                      <span
+                        title="Struggled before solving"
+                        className="rounded-full bg-destructive/20 px-1.5 text-[10px] font-bold"
+                      >
+                        {c.struggled}
+                      </span>
+                    )}
+                    {c.missCount > 0 && (
+                      <span
+                        title="Skipped / missed"
+                        className="rounded-full bg-muted px-1.5 text-[10px] font-bold text-muted-foreground"
+                      >
+                        {c.missCount}
+                      </span>
+                    )}
+                  </span>
+                ))}
+              </div>
+              <div className="mt-3 flex items-center gap-3 text-[10px] text-muted-foreground">
+                <span className="flex items-center gap-1">
+                  <span className="rounded-full bg-destructive/20 px-1.5 font-bold text-destructive">
+                    #
+                  </span>
+                  struggled
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="rounded-full bg-muted px-1.5 font-bold">#</span>
+                  skipped
+                </span>
+              </div>
+            </div>
+          </section>
         )}
 
         {isLoading && (

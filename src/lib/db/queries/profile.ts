@@ -1,7 +1,12 @@
 import { supabase } from "@/lib/supabase/client";
 import { getCurrentQuestStreak } from "@/lib/db/queries/daily-quest";
+import type { FreezeRange } from "@/lib/streak";
 
-export async function getProfileData(userId: string) {
+export async function getProfileData(
+  userId: string,
+  /** An expired user's current locked gap, so their saved streak shows. */
+  pendingFreezes: FreezeRange[] = []
+) {
   const [
     userRes,
     quizSessionsRes,
@@ -18,7 +23,7 @@ export async function getProfileData(userId: string) {
       .select("id, score, total_questions, time_elapsed_seconds")
       .eq("user_id", userId)
       .eq("source", "cpa"),
-    getCurrentQuestStreak(userId),
+    getCurrentQuestStreak(userId, pendingFreezes),
   ]);
 
   const userRecord = userRes.data;
@@ -59,6 +64,7 @@ export async function getProfileData(userId: string) {
       : null,
     totalScore,
     questsDone: quizSessions.length,
+    questionsAnswered: totalAnswers,
     totalTimeSeconds,
     accuracy,
     streak,

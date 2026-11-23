@@ -13,10 +13,16 @@ type Goal = {
   currentValue: number;
 };
 
-const GOAL_META: Record<GoalType, { label: string; unit: string; defaultTarget: number }> = {
-  weekly_xp: { label: "Weekly XP Target", unit: "XP", defaultTarget: 200 },
-  accuracy_target: { label: "Accuracy Target", unit: "%", defaultTarget: 80 },
-  streak_days: { label: "Streak Target", unit: "days", defaultTarget: 7 },
+// `benchmark` is a recommended reference value rendered as a marker on each bar
+// so users can compare their self-set target against a suggested standard
+// (accuracy benchmark = CPA passing accuracy of 75%).
+const GOAL_META: Record<
+  GoalType,
+  { label: string; unit: string; defaultTarget: number; benchmark: number; benchmarkLabel: string }
+> = {
+  weekly_xp: { label: "Weekly XP Target", unit: "XP", defaultTarget: 200, benchmark: 300, benchmarkLabel: "Recommended" },
+  accuracy_target: { label: "Accuracy Target", unit: "%", defaultTarget: 80, benchmark: 75, benchmarkLabel: "CPA pass" },
+  streak_days: { label: "Streak Target", unit: "days", defaultTarget: 7, benchmark: 7, benchmarkLabel: "Recommended" },
 };
 
 const GOAL_ORDER: GoalType[] = ["weekly_xp", "accuracy_target", "streak_days"];
@@ -39,6 +45,9 @@ function GoalRow({
   const target = goal?.targetValue ?? null;
   const current = goal?.currentValue ?? 0;
   const pct = target ? Math.min(100, Math.round((current / target) * 100)) : 0;
+  // Position of the benchmark marker along the bar, relative to the user's target.
+  const benchmarkPct =
+    target && meta.benchmark > 0 ? Math.min(100, Math.round((meta.benchmark / target) * 100)) : null;
 
   return (
     <div className="space-y-1.5">
@@ -82,12 +91,24 @@ function GoalRow({
           </button>
         )}
       </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-muted">
         <div
           className={cn("h-full rounded-full transition-all", pct >= 100 ? "bg-athena-success" : "bg-primary")}
           style={{ width: `${pct}%` }}
         />
+        {benchmarkPct !== null && benchmarkPct < 100 && (
+          <div
+            className="absolute top-0 h-full w-0.5 bg-foreground/60"
+            style={{ left: `${benchmarkPct}%` }}
+            title={`${meta.benchmarkLabel}: ${meta.benchmark} ${meta.unit}`}
+          />
+        )}
       </div>
+      {benchmarkPct !== null && (
+        <p className="text-[10px] text-muted-foreground">
+          {meta.benchmarkLabel}: {meta.benchmark} {meta.unit}
+        </p>
+      )}
     </div>
   );
 }

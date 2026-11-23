@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, Suspense } from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
@@ -17,7 +17,6 @@ import { StatsCards } from "@/components/dashboard/stats-cards";
 import { FriendsLeaderboard } from "@/components/dashboard/friends-leaderboard";
 import { CpaExamCard } from "@/components/dashboard/cpa-exam-card";
 import { ParticlesBackground } from "@/components/particles-background";
-import { UpgradeBanner } from "@/components/dashboard/upgrade-banner";
 import type { CpaSection } from "@/types/cpa-exam";
 
 type StreakDay = {
@@ -56,6 +55,7 @@ type DashboardData = {
   completedSessions: number;
   totalSessions: number;
   streak: number;
+  weeklyStreak: number;
   totalScore: number;
   weeklyDelta: number;
   topics: { slug: string; name: string; subtopicCount: number }[];
@@ -156,13 +156,6 @@ export default function DashboardPage() {
             />
           </motion.div>
 
-          {/* Upgrade banner — shown when redirected from a premium route */}
-          <motion.div variants={staggerItem}>
-            <Suspense fallback={null}>
-              <UpgradeBanner />
-            </Suspense>
-          </motion.div>
-
           {/* Two-column layout */}
           <div className="mt-4 grid grid-cols-1 gap-6 lg:grid-cols-5">
             {/* Left column (main) */}
@@ -196,6 +189,7 @@ export default function DashboardPage() {
                 <QuestStreak
                   streak={data.streak}
                   bestStreak={data.user.bestStreak}
+                  weeklyStreak={data.weeklyStreak}
                   days={data.weeklyStreakDays}
                 />
               </motion.div>

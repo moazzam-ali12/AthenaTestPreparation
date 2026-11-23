@@ -3,6 +3,7 @@
 import { CheckCircle2, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MathContent } from "./math-content";
+import { SolutionWalkthrough } from "./solution-walkthrough";
 import type { Problem } from "./types";
 
 const difficultyColor: Record<string, string> = {
@@ -92,27 +93,10 @@ export function ReviewItem({ problem, index, selectedOption }: ReviewItemProps) 
         </div>
       )}
 
-      <div className="rounded-md bg-muted p-3 space-y-2">
-        <p className="text-sm font-medium">Explanation</p>
-        <MathContent content={problem.explanation} />
-      </div>
-
-      {problem.solutionSteps.length > 0 && (
-        <div className="rounded-md bg-muted p-3">
-          <p className="text-sm font-medium mb-2">Solution Steps</p>
-          <ol className="space-y-1.5">
-            {problem.solutionSteps.map((step) => (
-              <li key={step.step} className="text-sm text-muted-foreground">
-                <span className="font-medium">{step.step}.</span>{" "}
-                {step.instruction}
-                {step.math && (
-                  <code className="ml-1 text-xs font-mono">{step.math}</code>
-                )}
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
+      <SolutionWalkthrough
+        explanation={problem.explanation}
+        solutionSteps={problem.solutionSteps}
+      />
     </div>
   );
 }

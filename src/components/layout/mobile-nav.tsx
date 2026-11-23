@@ -19,19 +19,27 @@ const navItems = [
   { href: "/profile", label: "Profile", icon: User },
 ];
 
+/**
+ * Focus-mode routes: full-screen flows whose own bottom action bar (Back/Next,
+ * Submit) the tab bar would cover. Practice-exam attempts (`/practice-exam/<id>/…`,
+ * not the picker), TBS attempts and quiz attempts.
+ */
+export function isFocusRoute(pathname: string): boolean {
+  return (
+    pathname.startsWith("/onboarding") ||
+    pathname.includes("/quiz/") ||
+    /^\/practice-exam\/[^/]+/.test(pathname) ||
+    /\/tbs\/[^/]+/.test(pathname)
+  );
+}
+
 export function MobileNav() {
   const pathname = usePathname();
 
-  // Hide during onboarding and full-screen quiz flows
-  if (
-    pathname.startsWith("/onboarding") ||
-    pathname.includes("/quiz/")
-  ) {
-    return null;
-  }
+  if (isFocusRoute(pathname)) return null;
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-50 flex md:hidden border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+    <nav className="fixed bottom-0 left-0 right-0 z-50 flex md:hidden pb-[env(safe-area-inset-bottom)] border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       {navItems.map((item) => {
         const isActive =
           item.href === "/dashboard"

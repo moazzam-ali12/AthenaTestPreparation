@@ -1,12 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
-import { Sparkles, Zap, Check, ExternalLink } from "lucide-react";
+import { Sparkles, Zap, Check, ExternalLink, Flame, Star, ListChecks } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Suspense } from "react";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { PLANS, DEFAULT_PLAN, type PlanId } from "@/lib/plans";
+import { hasProAccess } from "@/lib/subscription";
+import { useTrackEvent } from "@/hooks/use-track-event";
 
 const FEATURES = [
   "Unlimited practice quizzes across AUD, FAR, REG, BAR, ISC & TCP",
@@ -19,25 +23,87 @@ const FEATURES = [
   "Streak tracking and gamified tier progression",
 ];
 
+type ProgressSummary = { streak: number; totalXp: number; questionsAnswered: number };
+
+/** What an expired user has built so far: a nudge that it's all still there. */
+function SavedProgress() {
+  const { data } = useQuery<ProgressSummary>({
+    queryKey: ["profile"],
+    queryFn: () =>
+      fetch("/api/profile").then((r) => {
+        if (!r.ok) throw new Error("Failed to load profile");
+        return r.json();
+      }),
+    staleTime: 2 * 60_000,
+  });
+  if (!data) return null;
+  const stats = [
+    { icon: Flame, label: "day streak", value: data.streak ?? 0 },
+    { icon: Star, label: "XP earned", value: data.totalXp ?? 0 },
+    { icon: ListChecks, label: "questions answered", value: data.questionsAnswered ?? 0 },
+  ];
+  return (
+    <div data-testid="saved-progress" className="mt-4 grid grid-cols-3 gap-2">
+      {stats.map(({ icon: Icon, label, value }) => (
+        <div key={label} className="border border-border bg-card px-3 py-2 text-center">
+          <Icon className="mx-auto h-4 w-4 text-primary" />
+          <p className="mt-1 text-lg font-bold tabular-nums">{value.toLocaleString()}</p>
+          <p className="text-[11px] leading-tight text-muted-foreground">{label}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function SubscribePage() {
   const searchParams = useSearchParams();
   const success = searchParams.get("checkout") === "success";
+  const trialEnded = searchParams.get("reason") === "trial_ended";
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [portalLoading, setPortalLoading] = useState(false);
-  const { data: userData } = useCurrentUser();
-  const isSubscribed =
-    userData?.user.subscriptionStatus === "active" ||
-    userData?.user.subscriptionStatus === "trialing";
+  const [plan, setPlan] = useState<PlanId>(DEFAULT_PLAN);
+  const { data: userData, refetch } = useCurrentUser();
+  const selected = PLANS[plan];
+  const annualSavings = PLANS.monthly.price * 12 - PLANS.annual.price;
+  const isSubscribed = hasProAccess(userData?.user.subscriptionStatus);
+  const trackEvent = useTrackEvent();
+  const userLoaded = !!userData;
+
+  // One paywall_viewed per visit, once we know the viewer isn't already subscribed.
+  useEffect(() => {
+    if (!userLoaded || isSubscribed || success) return;
+    trackEvent({ name: "paywall_viewed", props: { surface: "subscribe", reason: trialEnded ? "trial_ended" : null } });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userLoaded]);
+
+  // The webhook lands a moment after Stripe redirects back, so poll briefly
+  // until the cached user flips to Pro.
+  useEffect(() => {
+    if (!success || isSubscribed) return;
+    const interval = setInterval(() => refetch(), 2000);
+    const timeout = setTimeout(() => clearInterval(interval), 20_000);
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, [success, isSubscribed, refetch]);
 
   async function handleUpgrade() {
     setCheckoutLoading(true);
     try {
-      const res = await fetch("/api/stripe/checkout", { method: "POST" });
-      if (!res.ok) throw new Error();
+      const res = await fetch("/api/stripe/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan }),
+      });
+      if (!res.ok) {
+        const { error } = await res.json().catch(() => ({ error: null }));
+        throw new Error(error ?? "Could not start checkout. Please try again.");
+      }
       const { url } = await res.json();
       window.location.href = url;
-    } catch {
-      toast.error("Could not start checkout. Please try again.");
+    } catch (err) {
+      toast.error((err as Error).message || "Could not start checkout. Please try again.");
       setCheckoutLoading(false);
     }
   }
@@ -67,6 +133,20 @@ function SubscribePage() {
         </motion.div>
       )}
 
+      {trialEnded && !isSubscribed && !success && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-8 border border-primary/30 bg-primary/5 p-4 text-sm"
+        >
+          <p>
+            Your free trial has ended. Your progress is saved. Subscribe to continue where you left off
+            — your streak picks up right where it stopped.
+          </p>
+          <SavedProgress />
+        </motion.div>
+      )}
+
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -85,9 +165,26 @@ function SubscribePage() {
 
         {/* Plan card */}
         <div className="border border-primary/30 bg-card p-8">
+          <div className="mb-6 grid grid-cols-2 border">
+            {(Object.keys(PLANS) as PlanId[]).map((id) => (
+              <button
+                key={id}
+                onClick={() => setPlan(id)}
+                className={`py-2 text-xs font-semibold uppercase tracking-wider transition-colors ${
+                  plan === id ? "bg-primary text-primary-foreground" : "hover:bg-accent"
+                }`}
+              >
+                {PLANS[id].label}
+                {id === "annual" && annualSavings > 0 && ` · Save $${annualSavings}`}
+              </button>
+            ))}
+          </div>
+
           <div className="mb-6 flex items-baseline gap-2">
-            <span className="text-4xl font-bold">$19</span>
-            <span className="text-sm text-muted-foreground">/ month after your free trial</span>
+            <span className="text-4xl font-bold">${selected.price}</span>
+            <span className="text-sm text-muted-foreground">
+              / {selected.interval}
+            </span>
           </div>
 
           <ul className="mb-8 space-y-3">
@@ -101,11 +198,15 @@ function SubscribePage() {
 
           <button
             onClick={handleUpgrade}
-            disabled={checkoutLoading}
+            disabled={checkoutLoading || isSubscribed}
             className="flex w-full items-center justify-center gap-2 bg-primary py-3 text-sm font-semibold uppercase tracking-wider text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
           >
             <Zap className="h-4 w-4" />
-            {checkoutLoading ? "Redirecting to Stripe…" : "Start Your 7-Day Free Trial"}
+            {isSubscribed
+              ? "You're subscribed"
+              : checkoutLoading
+                ? "Redirecting to Stripe…"
+                : "Subscribe Now"}
           </button>
 
           <p className="mt-3 text-center text-xs text-muted-foreground">

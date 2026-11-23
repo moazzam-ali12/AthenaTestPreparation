@@ -8,6 +8,13 @@ import re
 from agno.agent import Agent
 from agno.models.anthropic import Claude
 
+from app.pre_generation.problem_quality import (
+    DIFFICULTY_RUBRIC,
+    PROBLEM_TYPE_ROTATIONS,
+    is_valid_problem,
+    verify_answer_keys,
+)
+
 BATCH_SIZE = 10  # 10 per batch — large enough to be fast, small enough to avoid truncation
 MAX_RETRIES = 3
 
@@ -43,7 +50,8 @@ problem_agent = Agent(
         "- detailedHint: string (walks through the reasoning step by step, leaving only the final computation or conclusion for the candidate — gets close but does NOT give away the answer)",
         "- optionHints: { optionIndex: number, misconception: string, hint: string }[] (one entry for EACH of the 3 wrong options — optionIndex is its 0-3 index; misconception is a short label naming the specific error that choice reflects e.g. 'Confusing accrual with cash basis'; hint nudges the candidate away from that specific misconception without revealing the correct answer)",
         "Keep explanations and steps CONCISE to stay within output limits.",
-        "Problems should be realistic CPA Exam-style questions with varying difficulty, reflecting real professional/technical accounting scenarios (per the current AICPA Blueprints) — not passage-based reading comprehension.",
+        "Problems should be realistic CPA Exam-style questions at the requested difficulty, reflecting real professional/technical accounting scenarios (per the current AICPA Blueprints) — not passage-based reading comprehension.",
+        DIFFICULTY_RUBRIC,
         "Ensure all answers are correct, unambiguous, and technically accurate per current authoritative literature (GAAP, GAAS, IRC, etc. as applicable).",
         "Never use em-dashes (—) in any text fields.",
         "Emojis are allowed but use them sparingly; do not overuse them.",
@@ -113,15 +121,6 @@ def _extract_json_array(text: str) -> list[dict]:
     raise ValueError(f"Could not parse JSON from LLM output (length={len(content)})")
 
 
-PROBLEM_TYPE_ROTATIONS = [
-    "word problems set in real-world contexts (finance, science, everyday situations)",
-    "pure algebraic / symbolic manipulation problems",
-    "problems involving tables, graphs, or data interpretation",
-    "multi-step problems that chain two or more concepts together",
-    "problems where a common student error leads to a tempting wrong answer",
-]
-
-
 async def generate_problems_batch(
     subtopic_name: str,
     topic_name: str,
@@ -131,13 +130,18 @@ async def generate_problems_batch(
     batch_size: int = BATCH_SIZE,
     start_order_index: int = 0,
     subject: str = "aud",
+    verify: bool = False,
 ) -> list[dict]:
     """Generate a batch of CPA Exam problems via LLM with retry logic.
 
     All problems in a batch share the same difficulty level so that callers
-    can independently parallelize easy/medium/hard generation.
+    can independently parallelize easy/medium/hard generation. Problems that
+    fail structural validation are dropped; with verify=True, problems whose
+    answer key an independent solve disagrees with are dropped too.
     """
-    subject_label = SUBJECT_LABELS.get(subject, "CPA Auditing and Attestation (AUD)")
+    if subject not in SUBJECT_LABELS:
+        raise ValueError(f"Unknown CPA subject '{subject}'. Choose from: {', '.join(SUBJECT_LABELS)}")
+    subject_label = SUBJECT_LABELS[subject]
 
     problem_type = PROBLEM_TYPE_ROTATIONS[batch_number % len(PROBLEM_TYPE_ROTATIONS)]
 
@@ -157,11 +161,13 @@ async def generate_problems_batch(
     for attempt in range(MAX_RETRIES):
         try:
             response = await problem_agent.arun(prompt)
-            problems = _extract_json_array(response.content)
+            problems = [p for p in _extract_json_array(response.content) if is_valid_problem(p)]
+            if verify:
+                problems = await verify_answer_keys(problems, subject_label)
 
             # Validate we got at least 1 problem
             if not problems:
-                raise ValueError("Empty problems array")
+                raise ValueError("No valid problems in response")
 
             # Add DB fields
             result = []

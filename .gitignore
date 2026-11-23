@@ -55,3 +55,11 @@ next-env.d.ts
 
 .supabase/
 .vercel
+
+supabase/.temp/
+
+# Seed data with answer keys — keep local, never commit
+agents/data/*.json
+
+# local database backups (scripts/backup-db.*)
+/backups/

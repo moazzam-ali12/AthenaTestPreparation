@@ -4,6 +4,7 @@ import { useState, useCallback, useRef } from "react";
 import { useAudioAnalyzer } from "./use-audio-analyzer";
 import { trimHistory } from "@/lib/trim-history";
 import type { WhiteboardStep } from "@/types/whiteboard";
+import type { PracticeLink, TutorMode, TutorRequestMode } from "@/lib/tutor-modes";
 
 export type Message = {
   role: "user" | "tutor";
@@ -20,7 +21,9 @@ export type QuizContext = {
   options: string[];
   hint: string;
   solutionSteps: { step: number; instruction: string; math: string }[];
-  correctOption: number;
+  /** Omitted for server-graded practice; the route resolves it from `problemId`. */
+  correctOption?: number;
+  problemId?: string;
   studentAnswer?: number;
 };
 
@@ -30,6 +33,8 @@ type UseAthenaConversationOptions = {
   variant?: "lesson" | "quiz";
   quizContext?: QuizContext;
   quizStreamUrl?: string;
+  /** Quiz tutor mode sent with every message (Hint / Guided / Full explanation). */
+  tutorMode?: TutorMode;
 };
 
 import { sanitizeForTTS } from "@/lib/sanitize-for-tts";
@@ -40,6 +45,7 @@ export function useAthenaConversation({
   variant = "lesson",
   quizContext,
   quizStreamUrl,
+  tutorMode,
 }: UseAthenaConversationOptions) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [mode, setMode] = useState<Mode>("text");
@@ -64,6 +70,10 @@ export function useAthenaConversation({
   // Mutable ref so reset() can swap context without recreating streamChat
   const quizContextRef = useRef(quizContext);
   quizContextRef.current = quizContext;
+  const tutorModeRef = useRef(tutorMode);
+  tutorModeRef.current = tutorMode;
+  // Follow-up practice the "Why was I wrong?" analysis attached (last response wins).
+  const [practiceLinks, setPracticeLinks] = useState<PracticeLink[]>([]);
 
   const {
     amplitude,
@@ -73,7 +83,7 @@ export function useAthenaConversation({
   } = useAudioAnalyzer();
 
   const streamChat = useCallback(
-    async (question: string): Promise<string> => {
+    async (question: string, modeOverride?: TutorRequestMode): Promise<string> => {
       const endpoint =
         variant === "quiz"
           ? (quizStreamUrl ?? "/api/agent/quiz-chat/stream")
@@ -87,7 +97,7 @@ export function useAthenaConversation({
         : undefined;
       const body =
         variant === "quiz" && quizContextRef.current
-          ? { question, ...quizContextRef.current, history }
+          ? { question, ...quizContextRef.current, history, mode: modeOverride ?? tutorModeRef.current }
           : { question, lessonTitle, lessonContent };
 
       const res = await fetch(endpoint, {
@@ -169,6 +179,9 @@ export function useAthenaConversation({
                   id: nextStepIdRef.current++,
                 } as WhiteboardStep;
                 setWhiteboardSteps((prev) => [...prev, step]);
+              }
+              if (Array.isArray(parsed.practice_links)) {
+                setPracticeLinks(parsed.practice_links as PracticeLink[]);
               }
               if (parsed.error) {
                 throw new Error(parsed.error);
@@ -365,14 +378,14 @@ export function useAthenaConversation({
   }, []);
 
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, opts?: { mode?: TutorRequestMode }) => {
       if (!text.trim() || isProcessing) return;
 
       setMessages((prev) => [...prev, { role: "user", content: text }]);
       setIsProcessing(true);
 
       try {
-        await streamChat(text);
+        await streamChat(text, opts?.mode);
       } catch {
         setMessages((prev) => [
           ...prev,
@@ -393,6 +406,7 @@ export function useAthenaConversation({
   const reset = useCallback((newContext?: QuizContext | null) => {
     if (newContext !== undefined) quizContextRef.current = newContext ?? undefined;
     setMessages([]);
+    setPracticeLinks([]);
     setWhiteboardSteps([]);
     nextStepIdRef.current = 0;
   }, []);
@@ -421,5 +435,6 @@ export function useAthenaConversation({
     stopRecording,
     toggleMode,
     reset,
+    practiceLinks,
   };
 }

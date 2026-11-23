@@ -5,9 +5,32 @@ import { sendPushToUser } from "@/lib/push";
 import { NextResponse } from "next/server";
 
 // Runs hourly (vercel.json: "0 * * * *")
-// Finds active schedule slots starting in the next 60 mins (UTC) and sends one reminder
+// Finds active schedule slots starting in the next 60 mins and sends one reminder
 // per user. If a user has multiple slots in the window, the earliest is used.
-// Note: schedule times are stored in the user's local time; this is UTC-relative for MVP.
+// Schedule times are stored in the user's local time, so each user's day-of-week
+// and window are evaluated in their own timezone (users.timezone, default UTC).
+const DOW = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+/** Current { dow, mins-since-midnight } in the given IANA timezone. */
+function localNow(now: Date, timezone: string): { dow: string; mins: number } {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      weekday: "long",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(now);
+    const weekday = parts.find((p) => p.type === "weekday")?.value ?? "";
+    const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "0") % 24;
+    const minute = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
+    return { dow: weekday.toLowerCase(), mins: hour * 60 + minute };
+  } catch {
+    // Invalid timezone → fall back to UTC.
+    return { dow: DOW[now.getUTCDay()], mins: now.getUTCHours() * 60 + now.getUTCMinutes() };
+  }
+}
+
 export async function GET(req: Request) {
   const cronSecret = process.env.CRON_SECRET;
   if (!cronSecret) return NextResponse.json({ error: "Cron not configured" }, { status: 500 });
@@ -17,33 +40,39 @@ export async function GET(req: Request) {
   }
 
   const now = new Date();
-  const todayDow = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"][
-    now.getDay()
-  ];
-  const currentMins = now.getUTCHours() * 60 + now.getUTCMinutes();
-  const windowEnd = currentMins + 60;
 
+  // Fetch all active slots joined with each user's timezone; filter per-user below
+  // using that user's local clock rather than a single UTC comparison.
   const { data: schedules, error: schedErr } = await supabase
     .from("schedules")
-    .select("id, user_id, start_time")
-    .eq("day_of_week", todayDow)
+    .select("id, user_id, start_time, day_of_week, users!inner(id, email, display_name, timezone)")
     .eq("is_active", true);
 
   if (schedErr || !schedules?.length) {
     return NextResponse.json({ sent: 0 });
   }
 
-  // Filter to slots in the next 60-min window
-  const inWindow = (schedules as { id: string; user_id: string; start_time: string }[]).filter((s) => {
+  type ScheduleRow = {
+    id: string;
+    user_id: string;
+    start_time: string;
+    day_of_week: string;
+    users: { id: string; email: string | null; display_name: string | null; timezone: string | null };
+  };
+
+  // Filter to slots in the next 60-min window, evaluated in each user's timezone
+  const inWindow = (schedules as unknown as ScheduleRow[]).filter((s) => {
+    const { dow, mins: currentMins } = localNow(now, s.users?.timezone ?? "UTC");
+    if (s.day_of_week !== dow) return false;
     const [h, m] = s.start_time.split(":").map(Number);
     const slotMins = h * 60 + m;
-    return slotMins >= currentMins && slotMins < windowEnd;
+    return slotMins >= currentMins && slotMins < currentMins + 60;
   });
 
   if (!inWindow.length) return NextResponse.json({ sent: 0 });
 
   // Deduplicate: one email per user, using earliest slot in window
-  const earliestByUser = new Map<string, { user_id: string; start_time: string }>();
+  const earliestByUser = new Map<string, ScheduleRow>();
   for (const slot of inWindow) {
     const existing = earliestByUser.get(slot.user_id);
     if (!existing) {
@@ -55,20 +84,9 @@ export async function GET(req: Request) {
     }
   }
 
-  const uniqueUserIds = [...earliestByUser.keys()];
-  const { data: users } = await supabase
-    .from("users")
-    .select("id, email, display_name")
-    .in("id", uniqueUserIds)
-    .not("email", "is", null);
-
-  const userMap = new Map(
-    (users ?? []).map((u: { id: string; email: string; display_name: string | null }) => [u.id, u])
-  );
-
   let sent = 0;
   for (const [userId, slot] of earliestByUser) {
-    const user = userMap.get(userId);
+    const user = slot.users;
     if (!user?.email) continue;
 
     const [h, m] = slot.start_time.split(":").map(Number);

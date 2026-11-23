@@ -2,14 +2,38 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { Swords, Sparkles, CheckCircle2, Zap } from "lucide-react";
+import { Swords, Sparkles, CheckCircle2, Zap, Lock } from "lucide-react";
 import { useTodaysQuest } from "@/hooks/use-daily-quest";
+import { useCurrentUser } from "@/hooks/use-current-user";
+import { useAccess } from "@/hooks/use-trial";
+import { hasQuestAccess } from "@/lib/trial";
+import { useUpgradeModal } from "@/components/trial/upgrade-modal-provider";
 
 export function DailyQuestCard() {
-  const { data, isLoading } = useTodaysQuest();
+  const { data: userData, loading: userLoading } = useCurrentUser();
+  const { tier } = useAccess();
+  const unlocked = hasQuestAccess(tier);
+  const onTrial = unlocked && tier === "trial";
+  const { openUpgrade } = useUpgradeModal();
+  const { data, isLoading } = useTodaysQuest(unlocked);
 
-  if (isLoading) {
+  if (userLoading || (unlocked && isLoading)) {
     return <div className="h-32 bg-muted animate-pulse rounded-lg" />;
+  }
+
+  // Pro and (while QUEST_ENABLED_IN_TRIAL) trial get the quest; expired is locked.
+  if (!unlocked) {
+    return (
+      <button type="button" className="block w-full" onClick={() => openUpgrade("locked")}>
+        <div className="relative border-2 border-muted-foreground/20 bg-gradient-to-b from-muted/50 to-transparent px-6 py-8 text-center rounded-lg cursor-pointer transition-colors hover:border-primary/40">
+          <Lock className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+          <p className="text-lg font-semibold">Daily Quests are a Pro feature</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Subscribe to unlock your adaptive daily quest
+          </p>
+        </div>
+      </button>
+    );
   }
 
   const quest = data?.quest;
@@ -97,6 +121,9 @@ export function DailyQuestCard() {
         <p className="mt-3 text-sm font-medium text-muted-foreground">
           {answered > 0 ? "Continue quest →" : "Begin quest →"}
         </p>
+        {onTrial && (
+          <p className="mt-2 text-xs text-muted-foreground/70">Included in your free trial</p>
+        )}
       </motion.div>
     </Link>
   );

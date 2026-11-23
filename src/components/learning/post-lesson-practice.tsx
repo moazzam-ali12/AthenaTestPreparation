@@ -8,11 +8,14 @@ import { Sparkles, CheckCircle, XCircle, ChevronRight } from "lucide-react";
 import { PracticeGradientCard } from "@/components/quiz/practice-gradient-card";
 import { LessonCongratsScreen } from "@/components/learning/lesson-congrats-screen";
 import type { Problem } from "@/components/quiz/types";
+import type { CpaSubject } from "@/types/cpa-exam";
 
 type PostLessonPracticeProps = {
   topic: string;
   subtopic: string;
-  subject?: "math" | "english" | "reading" | "science";
+  subject?: CpaSubject;
+  /** Lets the server pick difficulty from the candidate's skill level. */
+  subtopicId?: string;
   onComplete: () => void;
   maxProblems?: number;
   /** When true, calls onComplete automatically after the last problem (no summary screen). */
@@ -30,7 +33,8 @@ type PostLessonPracticeProps = {
 export function PostLessonPractice({
   topic,
   subtopic,
-  subject = "math",
+  subject,
+  subtopicId,
   onComplete,
   maxProblems,
   autoComplete = false,
@@ -45,12 +49,12 @@ export function PostLessonPractice({
   const [correctCount, setCorrectCount] = useState(0);
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["practice-problems", topic, subtopic, subject],
+    queryKey: ["practice-problems", topic, subtopic, subject, subtopicId],
     queryFn: () =>
       fetch("/api/agent/practice-problems", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic, subtopic, subject }),
+        body: JSON.stringify({ topic, subtopic, subject, subtopicId }),
       }).then((r) => {
         if (!r.ok) throw new Error("Failed to load practice problems");
         return r.json() as Promise<{ problems: Problem[] }>;

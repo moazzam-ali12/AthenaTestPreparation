@@ -104,7 +104,8 @@ export async function getUserAttempts(
 export async function createAttempt(
   userId: string,
   testId: string,
-  section: CpaSection
+  section: CpaSection,
+  isSample = false
 ): Promise<CpaSectionExamAttempt> {
   const { data, error } = await db
     .from("cpa_section_exam_attempts")
@@ -113,6 +114,7 @@ export async function createAttempt(
       test_id: testId,
       section,
       status: "in_progress",
+      is_sample: isSample,
     })
     .select()
     .single();
@@ -356,7 +358,9 @@ function mapAttempt(row: any): CpaSectionExamAttempt {
     status: row.status,
     rawScore: row.raw_score,
     scaledScore: row.scaled_score,
-    passed: row.passed,
+    // `passed` is a generated column; samples never pass or fail.
+    passed: row.is_sample ? null : row.passed,
+    isSample: row.is_sample ?? false,
     totalTimeSeconds: row.total_time_seconds ?? 0,
     currentModule: row.current_module ?? 1,
     currentQuestion: row.current_question ?? 0,
@@ -389,4 +393,12 @@ function mapProgress(row: any): CpaSectionStatusEntry {
     attemptsCount: row.attempts_count ?? 0,
     lastAttemptAt: row.last_attempt_at,
   };
+}
+
+/** Subtopic names by ID, in one query (exam review labels). */
+export async function getSubtopicNames(subtopicIds: string[]): Promise<Map<string, string>> {
+  const ids = [...new Set(subtopicIds.filter(Boolean))];
+  if (ids.length === 0) return new Map();
+  const { data } = await db.from("subtopics").select("id, name").in("id", ids);
+  return new Map((data ?? []).map((r: { id: string; name: string }) => [r.id, r.name]));
 }

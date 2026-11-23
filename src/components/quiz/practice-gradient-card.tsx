@@ -1,86 +1,116 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useCallback, useEffect, useReducer, useRef } from "react";
 import { motion } from "framer-motion";
-import { Check, X, ChevronRight } from "lucide-react";
+import { toast } from "sonner";
+import { Check, X, ChevronRight, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { MathContent } from "./math-content";
 import { useSound } from "@/hooks/useSound";
 import type { Problem } from "./types";
+import {
+  cardReducer,
+  gradeLocally,
+  initialCardState,
+  isFinalMiss,
+  type AnswerKey,
+  type OptionHint,
+} from "./practice-card-machine";
+
+/**
+ * A practice problem. Locally graded problems carry their key; server-graded
+ * ones (`graded: "server"`) don't, and are checked through `gradeAnswer`.
+ */
+export type PracticeProblem = Omit<Problem, "correctOption" | "explanation" | "solutionSteps"> &
+  Partial<Pick<Problem, "correctOption" | "explanation" | "solutionSteps">> & { graded?: "server" };
+
+export type ServerGrade = { isCorrect: boolean; optionHint?: OptionHint; answer?: AnswerKey };
 
 type PracticeGradientCardProps = {
-  problem: Problem;
+  problem: PracticeProblem;
   questionNumber: number;
   /** Called when the student answers correctly. */
   onCorrect: () => void;
-  /** Called after the answer is revealed (all attempts exhausted). */
+  /** Called once after the answer is revealed (attempts used up). Never after a correct answer. */
   onExhausted: () => void;
+  /** Server grader, required for `graded: "server"` problems. `reveal` asks for the key on the final miss. */
+  gradeAnswer?: (problemId: string, option: number, reveal: boolean) => Promise<ServerGrade>;
 };
 
-type Phase = "answering" | "hinted" | "detailed" | "revealed";
+const CORRECT_DELAY_MS = 1000;
+const REVEAL_DELAY_MS = 2500;
 
-export function PracticeGradientCard({
+// Keyed by problem id so a new problem always starts from a fresh state.
+export function PracticeGradientCard(props: PracticeGradientCardProps) {
+  return <PracticeGradientCardInner key={props.problem.id} {...props} />;
+}
+
+function PracticeGradientCardInner({
   problem,
   questionNumber,
   onCorrect,
   onExhausted,
+  gradeAnswer,
 }: PracticeGradientCardProps) {
-  const [phase, setPhase] = useState<Phase>("answering");
-  const [selected, setSelected] = useState<number | null>(null);
-  const [wrongIndices, setWrongIndices] = useState<Set<number>>(new Set());
-  const calledRef = useRef(false);
+  const [state, dispatch] = useReducer(cardReducer, initialCardState);
   const sound = useSound();
 
-  const isCorrect = selected === problem.correctOption;
-  const isRevealed = phase === "revealed";
-  const selectedOptionHint =
-    selected !== null ? problem.optionHints?.find((oh) => oh.optionIndex === selected) : undefined;
-
-  // Auto-advance after reveal
+  // Latest callbacks in refs: parents pass inline handlers, and depending on
+  // them used to cancel the reveal timer on every re-render.
+  const onCorrectRef = useRef(onCorrect);
+  const onExhaustedRef = useRef(onExhausted);
   useEffect(() => {
-    if (!isRevealed || calledRef.current) return;
-    calledRef.current = true;
-    const delay = isCorrect ? 1000 : 2500;
-    const t = setTimeout(() => {
-      if (isCorrect) onCorrect();
-      else onExhausted();
-    }, delay);
+    onCorrectRef.current = onCorrect;
+    onExhaustedRef.current = onExhausted;
+  });
+
+  const { status, selected, answer, optionHint } = state;
+  const isCorrect = status === "correct" || status === "done";
+  const isRevealed = status === "revealed" || status === "exhausted";
+  const isFinished = isCorrect || isRevealed;
+  const correctOption = answer?.correctOption;
+
+  // Terminal transitions: timers depend only on `status`, so re-renders can't
+  // drop them; the reducer guarantees each callback fires at most once.
+  useEffect(() => {
+    if (status !== "correct" && status !== "revealed") return;
+    const t = setTimeout(() => dispatch({ type: "advance" }), status === "correct" ? CORRECT_DELAY_MS : REVEAL_DELAY_MS);
     return () => clearTimeout(t);
-  }, [isRevealed, isCorrect, onCorrect, onExhausted]);
+  }, [status]);
+  useEffect(() => {
+    if (status === "done") onCorrectRef.current();
+    else if (status === "exhausted") onExhaustedRef.current();
+  }, [status]);
 
   const handleSelect = useCallback(
-    (index: number) => {
-      if (isRevealed || wrongIndices.has(index)) return;
-
-      setSelected(index);
-
-      if (index === problem.correctOption) {
-        sound.achievement();
-        setPhase("revealed");
-        return;
-      }
-
-      // Wrong — progressive gradient
-      sound.wrong();
-      const next = new Set(wrongIndices);
-      next.add(index);
-      setWrongIndices(next);
-
-      if (phase === "answering" && problem.hint) {
-        setPhase("hinted");
-      } else if (phase === "hinted" && problem.detailedHint) {
-        setPhase("detailed");
+    async (index: number) => {
+      if ((status !== "answering" && status !== "hinted") || state.wrong.includes(index)) return;
+      dispatch({ type: "submit", option: index });
+      let event;
+      if (problem.graded === "server") {
+        if (!gradeAnswer) return dispatch({ type: "gradeFailed" });
+        try {
+          const g = await gradeAnswer(problem.id, index, isFinalMiss(state));
+          event = { type: "graded" as const, option: index, ...g };
+        } catch {
+          toast.error("Couldn't check that answer. Please try again.");
+          return dispatch({ type: "gradeFailed" });
+        }
       } else {
-        // No more hints — reveal
-        setPhase("revealed");
+        event = gradeLocally(problem, index);
       }
+      if (event.isCorrect) sound.achievement();
+      else sound.wrong();
+      dispatch(event);
     },
-    [isRevealed, wrongIndices, problem, phase, sound]
+    [status, state, problem, gradeAnswer, sound]
   );
 
+  const showHint = status === "hinted" || (status === "grading" && state.resumeStatus === "hinted");
+
   return (
-    <div className="flex flex-col gap-4 p-4">
+    <div className="flex flex-col gap-4 p-4" data-practice-status={status}>
       {/* Question number + text */}
       <div className="space-y-2">
         <span className="text-xs font-medium text-muted-foreground">
@@ -95,39 +125,38 @@ export function PracticeGradientCard({
       <div className="space-y-1.5">
         {problem.options.map((option, i) => {
           const isThis = selected === i;
-          const isRight = i === problem.correctOption;
-          const isWrong = wrongIndices.has(i);
+          const isRight = isFinished && i === correctOption;
+          const isWrong = state.wrong.includes(i);
+          const isPending = status === "grading" && isThis;
 
           return (
             <button
               key={i}
               onClick={() => handleSelect(i)}
-              disabled={isRevealed || isWrong}
+              disabled={isFinished || isWrong || status === "grading"}
               className={cn(
                 "flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
-                !isRevealed && !isWrong && "hover:bg-muted cursor-pointer",
-                isRevealed && isRight && "border-green-500 bg-green-500/10",
-                isRevealed && isThis && !isRight && "border-red-500 bg-red-500/10",
-                isRevealed && !isThis && !isRight && "opacity-50",
-                isWrong && !isRevealed && "border-red-500/50 bg-red-500/5 opacity-60",
+                !isFinished && !isWrong && status !== "grading" && "hover:bg-muted cursor-pointer",
+                isRight && "border-green-500 bg-green-500/10",
+                isFinished && isWrong && "border-red-500 bg-red-500/10",
+                isFinished && !isRight && !isWrong && "opacity-50",
+                isWrong && !isFinished && "border-red-500/50 bg-red-500/5 opacity-60",
+                isPending && "border-primary/60",
               )}
-              style={
-                isRevealed && isRight
-                  ? { boxShadow: "0 0 12px rgba(34, 197, 94, 0.3)" }
-                  : undefined
-              }
+              style={isRight ? { boxShadow: "0 0 12px rgba(34, 197, 94, 0.3)" } : undefined}
             >
               <span
                 className={cn(
                   "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-xs font-medium mt-0.5",
-                  isRevealed && isRight && "border-green-500 bg-green-500 text-white",
-                  ((isRevealed && isThis && !isRight) || isWrong) &&
-                    "border-red-500 bg-red-500 text-white",
+                  isRight && "border-green-500 bg-green-500 text-white",
+                  isWrong && "border-red-500 bg-red-500 text-white",
                 )}
               >
-                {isRevealed && isRight ? (
+                {isPending ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : isRight ? (
                   <Check className="h-3 w-3" />
-                ) : (isRevealed && isThis && !isRight) || isWrong ? (
+                ) : isWrong ? (
                   <X className="h-3 w-3" />
                 ) : (
                   String.fromCharCode(65 + i)
@@ -141,24 +170,22 @@ export function PracticeGradientCard({
         })}
       </div>
 
-      {/* Nudge hint (amber) */}
-      {(phase === "hinted" || phase === "detailed") && problem.hint && (
+      {/* After the first miss: nudge hint (amber) + walkthrough (blue) */}
+      {showHint && (optionHint || problem.hint) && (
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2"
         >
           <p className="text-xs font-bold uppercase tracking-widest text-amber-500 mb-0.5">
-            {selectedOptionHint ? selectedOptionHint.misconception : "Think about it:"}
+            {optionHint ? optionHint.misconception : "Think about it:"}
           </p>
           <p className="text-sm text-muted-foreground">
-            <MathContent content={selectedOptionHint?.hint ?? problem.hint} />
+            <MathContent content={optionHint?.hint ?? problem.hint} />
           </p>
         </motion.div>
       )}
-
-      {/* Detailed hint (blue) */}
-      {phase === "detailed" && problem.detailedHint && (
+      {showHint && problem.detailedHint && (
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
@@ -173,14 +200,14 @@ export function PracticeGradientCard({
         </motion.div>
       )}
 
-      {/* Revealed state — explanation */}
-      {isRevealed && (
+      {/* Finished — explanation */}
+      {isFinished && (
         <motion.div
           initial={{ opacity: 0, height: 0 }}
           animate={{ opacity: 1, height: "auto" }}
           className="space-y-1.5"
         >
-          {isCorrect && (
+          {isCorrect ? (
             <motion.div
               initial={{ scale: 0.5, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
@@ -190,13 +217,21 @@ export function PracticeGradientCard({
               <Check className="h-4 w-4" />
               <span className="text-sm font-bold">Correct!</span>
             </motion.div>
+          ) : (
+            <p className="text-sm font-bold text-muted-foreground">
+              {correctOption !== undefined && correctOption >= 0
+                ? `The answer is ${String.fromCharCode(65 + correctOption)}.`
+                : "Here's the answer."}
+            </p>
           )}
-          <div className="text-xs text-muted-foreground">
-            <MathContent content={problem.explanation} />
-          </div>
-          {problem.conceptTags && problem.conceptTags.length > 0 && (
+          {answer?.explanation && (
+            <div className="text-xs text-muted-foreground">
+              <MathContent content={answer.explanation} />
+            </div>
+          )}
+          {answer?.conceptTags && answer.conceptTags.length > 0 && (
             <div className="flex flex-wrap gap-1.5 pt-1">
-              {problem.conceptTags.map((tag) => (
+              {answer.conceptTags.map((tag) => (
                 <span
                   key={tag}
                   className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary"
@@ -206,12 +241,12 @@ export function PracticeGradientCard({
               ))}
             </div>
           )}
-          {!isCorrect && (
+          {status === "revealed" && (
             <Button
               size="sm"
               variant="ghost"
               className="gap-1 text-xs"
-              onClick={onExhausted}
+              onClick={() => dispatch({ type: "advance" })}
             >
               Got it, continue
               <ChevronRight className="h-3.5 w-3.5" />

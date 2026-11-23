@@ -11,15 +11,17 @@ type StreakDay = {
 export function QuestStreak({
   streak,
   bestStreak,
+  weeklyStreak,
   days,
 }: {
   streak: number;
   bestStreak?: number;
+  weeklyStreak?: number;
   days: StreakDay[];
 }) {
   return (
     <div className="border bg-card p-5">
-      <div className="mb-4 flex items-center gap-2">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Quest Streak
         </h3>
@@ -28,6 +30,15 @@ export function QuestStreak({
           Day {streak}
         </span>
         <span className="text-xs">🔥</span>
+        {(weeklyStreak ?? 0) > 0 && (
+          <>
+            <span className="text-xs text-muted-foreground">&middot;</span>
+            <span className="text-xs font-bold text-athena-amber">
+              {weeklyStreak}w
+            </span>
+            <span className="text-xs">📅</span>
+          </>
+        )}
         {(bestStreak ?? 0) > 0 && (
           <>
             <span className="text-xs text-muted-foreground">&middot;</span>

@@ -3,8 +3,10 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useEffect } from "react";
+import type { AnswerReveal } from "@/components/quiz/types";
 
-export function useTodaysQuest() {
+/** Pass `hasQuestAccess(tier)` (pro, or trial while QUEST_ENABLED_IN_TRIAL) as `enabled`. */
+export function useTodaysQuest(enabled = true) {
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["daily-quest"],
     queryFn: async () => {
@@ -13,6 +15,7 @@ export function useTodaysQuest() {
       return res.json();
     },
     staleTime: 60_000,
+    enabled,
   });
 
   useEffect(() => {
@@ -43,6 +46,13 @@ export function useGenerateQuest() {
   });
 }
 
+/** Server verdict for one quest answer, plus that question's now-revealed answer data. */
+export type QuestAnswerResult = AnswerReveal & {
+  isCorrect: boolean;
+  xpEarned: number;
+  overallLevelUp: number | null;
+};
+
 export function useAnswerQuestProblem() {
   const queryClient = useQueryClient();
 
@@ -51,16 +61,17 @@ export function useAnswerQuestProblem() {
       questProblemId: string;
       questId: string;
       selectedOption: number;
-      isCorrect: boolean;
       responseTimeMs: number;
       subtopicId: string;
       difficultyLevel: number;
-    }) => {
+    }): Promise<QuestAnswerResult | null> => {
       const res = await fetch("/api/daily-quest/answer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+      // 402: the global upgrade modal has already opened.
+      if (res.status === 402) return null;
       if (!res.ok) throw new Error("Failed to record answer");
       return res.json();
     },

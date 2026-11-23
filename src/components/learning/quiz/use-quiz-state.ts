@@ -113,10 +113,14 @@ export function useQuizState(problems: Problem[]) {
     if (phase !== "submitted") return 0;
     let correct = 0;
     for (const p of problems) {
-      if (answers.get(p.id) === p.correctOption) correct++;
+      // Count only clean first-try solves: final answer correct AND never
+      // wrong. Struggled-then-corrected (wrongCount > 0) or unsolved → 0.
+      if (answers.get(p.id) === p.correctOption && (wrongCounts.get(p.id) ?? 0) === 0) {
+        correct++;
+      }
     }
     return correct;
-  }, [phase, problems, answers]);
+  }, [phase, problems, answers, wrongCounts]);
 
   const unansweredCount = useMemo(() => {
     return problems.filter((p) => !answers.has(p.id)).length;

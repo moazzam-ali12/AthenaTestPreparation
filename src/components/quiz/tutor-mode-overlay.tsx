@@ -64,6 +64,9 @@ type TutorModeOverlayProps = {
   // Optional slot to replace the floating question card (e.g. practice problems)
   practiceContent?: React.ReactNode;
 
+  // Tutor mode selector / "Why was I wrong?" strip above the chat input
+  tutorControls?: React.ReactNode;
+
   // Close
   onClose: () => void;
 };
@@ -105,6 +108,7 @@ export function TutorModeOverlay({
   onElementsSelect,
   focusTrigger,
   practiceContent,
+  tutorControls,
   onClose,
 }: TutorModeOverlayProps) {
   const isPractice = !!practiceContent;
@@ -218,6 +222,7 @@ export function TutorModeOverlay({
         onStartRecording={onStartRecording}
         onStopRecording={onStopRecording}
         focusTrigger={focusTrigger}
+        header={tutorControls}
       />
     </motion.div>
   );

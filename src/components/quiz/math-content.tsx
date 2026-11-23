@@ -5,6 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import remarkGfm from "remark-gfm";
 import rehypeKatex from "rehype-katex";
+import { escapeCurrencyDollars } from "@/lib/math-currency";
 
 export const MathContent = React.memo(function MathContent({
   content,
@@ -25,7 +26,7 @@ export const MathContent = React.memo(function MathContent({
         remarkPlugins={[remarkMath, remarkGfm]}
         rehypePlugins={[rehypeKatex]}
       >
-        {content}
+        {escapeCurrencyDollars(content)}
       </ReactMarkdown>
     </div>
   );

@@ -4,7 +4,6 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { CpaExamContext, type CpaExamPhase } from "./cpa-exam-context";
 import { useAnswerCpaExam, useSubmitCpaExam } from "@/hooks/use-cpa-exam";
-import { SECTION_TIME_LIMIT_SECONDS } from "@/types/cpa-exam";
 import type {
   CpaSectionExamProblem,
   CpaSectionExamAnswer,
@@ -17,6 +16,8 @@ type Props = {
   test: CpaSectionExam;
   problems: CpaSectionExamProblem[];
   initialAnswers: CpaSectionExamAnswer[];
+  /** Server-provided time limit (short for sample tests). */
+  durationMinutes: number;
   children: React.ReactNode;
 };
 
@@ -25,6 +26,7 @@ export function CpaExamProvider({
   test,
   problems,
   initialAnswers,
+  durationMinutes,
   children,
 }: Props) {
   const router = useRouter();
@@ -67,7 +69,7 @@ export function CpaExamProvider({
 
   const examStartRef = useRef(Date.now());
   const [timeLeft, setTimeLeft] = useState(() =>
-    Math.max(0, SECTION_TIME_LIMIT_SECONDS - (attempt.totalTimeSeconds ?? 0))
+    Math.max(0, Math.round(durationMinutes * 60) - (attempt.totalTimeSeconds ?? 0))
   );
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -191,6 +193,7 @@ export function CpaExamProvider({
         phase,
         timeLeft,
         displayTime,
+        durationMinutes,
         goNext,
         goBack,
         goTo,

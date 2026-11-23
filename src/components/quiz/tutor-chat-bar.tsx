@@ -8,6 +8,7 @@ import { MessageBubble } from "@/components/lessons/message-bubble";
 import { VoiceOrb } from "@/components/lessons/voice-orb";
 import { ThinkingIndicator } from "@/components/lessons/thinking-indicator";
 import { MathContent } from "@/components/quiz/math-content";
+import { TutorQuotaHint } from "@/components/trial/tutor-quota-hint";
 
 type Message = {
   role: "user" | "tutor";
@@ -30,6 +31,8 @@ type TutorChatBarProps = {
   onStopRecording: () => void;
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   focusTrigger?: number;
+  /** Rendered at the top of the bar (e.g. the tutor mode selector). */
+  header?: React.ReactNode;
 };
 
 export function TutorChatBar({
@@ -47,6 +50,7 @@ export function TutorChatBar({
   onStopRecording,
   onKeyDown,
   focusTrigger,
+  header,
 }: TutorChatBarProps) {
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -119,6 +123,7 @@ export function TutorChatBar({
 
       {/* Main bar */}
       <div className="bg-card/90 backdrop-blur-md border-t">
+        {header}
         {/* Latest message subtitle */}
         {(lastTutorMessage || isProcessing) && !historyExpanded && (
           <div className="px-4 pt-2 pb-1 flex items-start gap-2">
@@ -132,6 +137,11 @@ export function TutorChatBar({
             ) : null}
           </div>
         )}
+
+        <TutorQuotaHint
+          refreshKey={isProcessing ? null : messages.length}
+          className="px-4 pt-1.5 text-right"
+        />
 
         {/* Input area */}
         <div className="px-4 py-2 flex items-end gap-2">

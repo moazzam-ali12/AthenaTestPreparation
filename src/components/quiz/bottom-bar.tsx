@@ -78,7 +78,7 @@ export function BottomBar({
 
   return (
     <>
-      <div className="flex h-14 shrink-0 items-center justify-between border-t bg-card px-4">
+      <div className="flex h-[calc(3.5rem+env(safe-area-inset-bottom))] shrink-0 items-center justify-between border-t bg-card px-4 pb-[env(safe-area-inset-bottom)]">
         <div />
         {!sequential ? (
           <Button

@@ -1,0 +1,19 @@
+{
+  "name": "athena-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:full": "playwright test",
+    "test:smoke": "playwright test --project=desktop --grep @smoke",
+    "test:suite": "playwright test suite/"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.10.2",
+    "@clerk/testing": "^2.2.55",
+    "@playwright/test": "^1.56.1",
+    "@types/pg": "^8.23.1",
+    "dotenv": "^18.0.10",
+    "pg": "^8.23.1"
+  }
+}

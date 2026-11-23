@@ -7,6 +7,7 @@ import { motion } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
 import { PartyPopper, Clock, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SkillLevel } from "@/components/shared/skill-level";
 
 type NextLessonResult =
   | {
@@ -20,6 +21,8 @@ type NextLessonResult =
       estimatedMinutes: number | null;
       attempted: boolean;
       bestScorePct: number | null;
+      skillLevel: number;
+      overallLevel: number;
       passedCount: number;
       totalCount: number;
     }
@@ -88,6 +91,12 @@ export default function QueuePage() {
                 </span>
               )}
             </div>
+
+            <SkillLevel
+              level={data.skillLevel}
+              overallLevel={data.overallLevel}
+              className="mt-4 max-w-xs"
+            />
 
             {data.attempted && (
               <p className="mt-3 text-sm text-athena-amber">

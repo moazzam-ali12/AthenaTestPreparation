@@ -119,6 +119,7 @@ def save_practice_problems(problems: list[dict]) -> None:
             "subtopic_slug": p["subtopic_slug"],
             "order_index": p["order_index"],
             "difficulty": p["difficulty"],
+            "difficulty_level": p.get("difficulty_level", 5),
             "question_text": p["question_text"],
             "options": p["options"],
             "correct_option": p["correct_option"],

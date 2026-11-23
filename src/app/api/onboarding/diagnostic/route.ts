@@ -47,6 +47,7 @@ export async function GET() {
         .from("problems")
         .select("id, question_text, options, correct_option, difficulty_level")
         .eq("source", "cpa")
+        .eq("status", "approved")
         .in("subtopic_id", subtopicIds)
         .gte("difficulty_level", 3)
         .lte("difficulty_level", 6)
@@ -61,6 +62,7 @@ export async function GET() {
         .from("problems")
         .select("id, question_text, options, correct_option, difficulty_level")
         .eq("source", "cpa")
+        .eq("status", "approved")
         .in("subtopic_id", subtopicIds)
         .limit(PROBLEMS_PER_SECTION);
 
@@ -74,6 +76,7 @@ export async function GET() {
         .select("id, question_text, options, correct_option, difficulty_level")
         .in("subtopic_id", subtopicIds)
         .in("source", ["cpa", "practice", "onboarding"])
+        .eq("status", "approved")
         .limit(PROBLEMS_PER_SECTION);
 
       return { section, problems: anySource ?? [] };

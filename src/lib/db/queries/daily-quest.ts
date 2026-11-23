@@ -1,4 +1,13 @@
 import { supabase } from "@/lib/supabase/client";
+import {
+  STREAK_SOURCE,
+  computeWeeklyStreak,
+  readStreak,
+  type FreezeRange,
+  type StoredStreak,
+  type StreakSource,
+} from "@/lib/streak";
+import { getStreakFreezes } from "@/lib/db/queries/streak-freezes";
 import type {
   DailyQuest,
   DailyQuestProblem,
@@ -50,7 +59,7 @@ function mapQuestProblem(row: Record<string, unknown>): DailyQuestProblem {
 export async function getTodaysQuest(
   userId: string
 ): Promise<{ quest: DailyQuest; problems: DailyQuestProblem[] } | null> {
-  const today = new Date().toISOString().split("T")[0];
+  const today = getLocalDateString();
 
   const { data: quest } = await (supabase as any)
     .from("daily_quests")
@@ -80,7 +89,7 @@ export async function getTodaysQuestWithDetails(
   quest: DailyQuest;
   problems: DailyQuestProblemWithDetails[];
 } | null> {
-  const today = new Date().toISOString().split("T")[0];
+  const today = getLocalDateString();
 
   const { data: quest } = await (supabase as any)
     .from("daily_quests")
@@ -106,8 +115,22 @@ export async function getTodaysQuestWithDetails(
       const subtopic = row.subtopics as Record<string, unknown>;
       const topic = (subtopic?.topics ?? {}) as Record<string, unknown>;
 
+      const base = mapQuestProblem(row);
+      // Unanswered: no key, solution or hints in the payload — POST
+      // /api/daily-quest/answer reveals them for that question once answered.
+      if (base.selectedOption === null) {
+        return {
+          ...base,
+          questionText: problem.question_text as string,
+          options: problem.options as { id: number; text: string }[],
+          conceptTags: (problem.concept_tags ?? []) as string[],
+          subtopicName: subtopic.name as string,
+          topicName: topic.name as string,
+        } as unknown as DailyQuestProblemWithDetails;
+      }
+
       return {
-        ...mapQuestProblem(row),
+        ...base,
         questionText: problem.question_text as string,
         options: problem.options as { id: number; text: string }[],
         correctOption: problem.correct_option as number,
@@ -144,7 +167,7 @@ export async function createDailyQuest(
     difficultyLevel: number;
   }[]
 ): Promise<{ quest: DailyQuest; problems: DailyQuestProblem[] }> {
-  const today = new Date().toISOString().split("T")[0];
+  const today = getLocalDateString();
 
   const { data: quest, error: questError } = await (supabase as any)
     .from("daily_quests")
@@ -258,37 +281,63 @@ export async function getQuestHistory(
   return (data ?? []).map(mapQuest);
 }
 
-/** Current consecutive-day streak of completed daily quests, ending today or yesterday. */
-export async function getCurrentQuestStreak(userId: string): Promise<number> {
+async function getCompletedQuestDates(userId: string): Promise<string[]> {
   const { data } = await supabase
     .from("daily_quests")
     .select("quest_date")
     .eq("user_id", userId)
-    .eq("status", "completed")
-    .order("quest_date", { ascending: false });
+    .eq("status", "completed");
+  return ((data ?? []) as { quest_date: string }[]).map((q) => q.quest_date);
+}
 
-  const questHistory = (data ?? []) as { quest_date: string }[];
-  if (questHistory.length === 0) return 0;
-
-  const today = new Date(getLocalDateString());
-  const mostRecent = new Date(questHistory[0].quest_date);
-  const daysSinceLast = Math.floor(
-    (today.getTime() - mostRecent.getTime()) / (1000 * 60 * 60 * 24)
+/** Current consecutive-day streak of completed daily quests, ending today or
+ * yesterday. Days the user was locked out (streak_freezes) are skipped. */
+export async function getCurrentQuestStreak(
+  userId: string,
+  /** Extra frozen days not yet recorded (an expired user's current locked gap). */
+  pendingFreezes: FreezeRange[] = [],
+  source: StreakSource = STREAK_SOURCE
+): Promise<number> {
+  return readStreak(
+    getLocalDateString(),
+    {
+      freezes: async () => [...(await getStreakFreezes(userId)), ...pendingFreezes],
+      dates: () => getCompletedQuestDates(userId),
+      stored: () => getStoredStreak(userId),
+    },
+    source
   );
-  if (daysSinceLast > 1) return 0;
+}
 
-  let streak = 1;
-  for (let i = 1; i < questHistory.length; i++) {
-    const curr = new Date(questHistory[i].quest_date);
-    const prev = new Date(questHistory[i - 1].quest_date);
-    const diffDays = Math.round(
-      (prev.getTime() - curr.getTime()) / (1000 * 60 * 60 * 24)
-    );
-    if (diffDays === 1) {
-      streak++;
-    } else {
-      break;
-    }
-  }
-  return streak;
+/** The stored streak columns (users.current_streak / streak_last_date). */
+export async function getStoredStreak(userId: string): Promise<StoredStreak | null> {
+  const { data } = await (supabase as any)
+    .from("users")
+    .select("current_streak, streak_last_date")
+    .eq("id", userId)
+    .maybeSingle();
+  if (!data) return null;
+  return { currentStreak: data.current_streak ?? 0, streakLastDate: data.streak_last_date ?? null };
+}
+
+/**
+ * THE write path: counts `day` (a completed daily quest's date) for the stored
+ * streak. Atomic and idempotent (record_streak_day). Every place that makes a
+ * day count must go through here.
+ */
+export async function recordStreakDay(userId: string, day: string): Promise<void> {
+  const { error } = await (supabase as any).rpc("record_streak_day", { p_user_id: userId, p_day: day });
+  if (error) throw new Error(`record_streak_day failed: ${error.message}`);
+}
+
+/** Current consecutive-week streak: calendar weeks (Sun–Sat) containing at least
+ * one completed daily quest, ending this week or last week (one week's grace,
+ * mirroring the daily streak's today-or-yesterday rule). 0 once a full week is
+ * missed — unless that week falls in a locked-out freeze period. */
+export async function getCurrentWeeklyStreak(userId: string): Promise<number> {
+  const [dates, freezes] = await Promise.all([
+    getCompletedQuestDates(userId),
+    getStreakFreezes(userId),
+  ]);
+  return computeWeeklyStreak(dates, getLocalDateString(), freezes);
 }

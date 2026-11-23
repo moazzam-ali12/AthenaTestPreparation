@@ -2,7 +2,9 @@ import { auth } from "@clerk/nextjs/server";
 import { getUserByClerkId } from "@/lib/db/queries/users";
 import { supabase } from "@/lib/supabase/client";
 import { upsertOnboardingProgress } from "@/lib/db/queries/onboarding";
+import { initializeAllSkills } from "@/lib/db/queries/subsection-skills";
 import { CPA_CORE_SECTIONS } from "@/types/cpa-exam";
+import { track } from "@/lib/analytics";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -15,6 +17,14 @@ const AnswerSchema = z.object({
 const BodySchema = z.object({
   answers: z.array(AnswerSchema),
 });
+
+const MAX_DIAGNOSTIC_START_LEVEL = 4;
+
+/** 100% → level 4, 75% → 3, 50% → 2, below → 1 (on the 4-question diagnostic). */
+function diagnosticStartLevel(correct: number, total: number): number {
+  const level = 1 + Math.floor((correct / total) * (MAX_DIAGNOSTIC_START_LEVEL - 1) + 0.0001);
+  return Math.max(1, Math.min(MAX_DIAGNOSTIC_START_LEVEL, level));
+}
 
 export async function POST(req: Request) {
   const { userId: clerkId } = await auth();
@@ -66,7 +76,30 @@ export async function POST(req: Request) {
     .update({ skill_score: skillScore })
     .eq("id", user.id);
 
+  // Seed each core section's starting skill level from the diagnostic so a
+  // strong candidate doesn't have to climb through easy questions first.
+  // Four questions is thin evidence, so the seed is capped at level 4 (the
+  // bottom of the medium band) and only touches subtopics never practiced.
+  try {
+    await initializeAllSkills(user.id);
+    for (const section of CPA_CORE_SECTIONS) {
+      const { correct, total } = sectionStats[section];
+      if (total === 0) continue;
+      const startLevel = diagnosticStartLevel(correct, total);
+      if (startLevel <= 1) continue;
+      await (supabase as any)
+        .from("subsection_skills")
+        .update({ level: startLevel, updated_at: new Date().toISOString() })
+        .eq("user_id", user.id)
+        .eq("section_category", section)
+        .eq("total_attempts", 0);
+    }
+  } catch (e) {
+    console.error("Failed to seed skill levels from diagnostic:", e);
+  }
+
   await upsertOnboardingProgress(user.id, { currentStep: "schedule" });
+  track("diagnostic_done", { correct: correctCount, total: totalQuestions }, user.id);
 
   return NextResponse.json({
     correctCount,

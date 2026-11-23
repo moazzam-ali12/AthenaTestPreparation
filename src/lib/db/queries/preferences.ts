@@ -1,3 +1,4 @@
+import { isTutorMode, type TutorMode } from "@/lib/tutor-modes";
 import { supabase } from "@/lib/supabase/client";
 
 function mapPrefs(row: {
@@ -12,6 +13,7 @@ function mapPrefs(row: {
   struggling_topic: string | null;
   tutor_character_id: string | null;
   tutor_voice_id: string | null;
+  tutor_mode?: string | null;
   created_at: string;
   updated_at: string;
 }) {
@@ -27,6 +29,7 @@ function mapPrefs(row: {
     strugglingTopic: row.struggling_topic,
     tutorCharacterId: row.tutor_character_id,
     tutorVoiceId: row.tutor_voice_id,
+    tutorMode: isTutorMode(row.tutor_mode) ? row.tutor_mode : null,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   };
@@ -55,6 +58,7 @@ export async function upsertUserPreferences(
     strugglingTopic: string;
     tutorCharacterId: string | null;
     tutorVoiceId: string | null;
+    tutorMode: TutorMode | null;
   }>
 ) {
   const { data: row } = await supabase
@@ -71,6 +75,7 @@ export async function upsertUserPreferences(
         ...(data.strugglingTopic !== undefined && { struggling_topic: data.strugglingTopic }),
         ...(data.tutorCharacterId !== undefined && { tutor_character_id: data.tutorCharacterId }),
         ...(data.tutorVoiceId !== undefined && { tutor_voice_id: data.tutorVoiceId }),
+        ...(data.tutorMode !== undefined && { tutor_mode: data.tutorMode }),
         updated_at: new Date().toISOString(),
       },
       { onConflict: "user_id" }

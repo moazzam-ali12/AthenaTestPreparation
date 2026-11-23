@@ -1,11 +1,13 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { toast } from "sonner";
 import { QuestContext, type QuestCompletionData } from "./quest-context";
 import { useAnswerQuestProblem, useCompleteQuest } from "@/hooks/use-daily-quest";
+import { announceOverallLevelUp } from "@/lib/adaptive/announce-level-up";
 import type { DailyQuest, DailyQuestProblemWithDetails } from "@/types/adaptive";
 import type { FeedbackState } from "@/components/quiz/answer-panel";
-import type { QuestionPhase } from "@/components/quiz/types";
+import { HIDDEN_ANSWER, type AnswerReveal, type QuestionPhase } from "@/components/quiz/types";
 
 type Props = {
   quest: DailyQuest;
@@ -13,7 +15,16 @@ type Props = {
   children: React.ReactNode;
 };
 
-export function QuestProvider({ quest, problems, children }: Props) {
+export function QuestProvider({ quest, problems: baseProblems, children }: Props) {
+  // Unanswered problems arrive without key/solution/hints; answers revealed by
+  // the server are merged in so the pages read them as before.
+  const [revealed, setRevealed] = useState<Map<string, AnswerReveal>>(new Map());
+  const problems = useMemo<DailyQuestProblemWithDetails[]>(
+    () => baseProblems.map((p) => ({ ...HIDDEN_ANSWER, ...p, ...revealed.get(p.id) })),
+    [baseProblems, revealed]
+  );
+  const pendingIdsRef = useRef<Set<string>>(new Set());
+
   const [currentIndex, setCurrentIndex] = useState(() => {
     // Resume from first unanswered problem
     const firstUnanswered = problems.findIndex((p) => p.isCorrect === null);
@@ -97,38 +108,13 @@ export function QuestProvider({ quest, problems, children }: Props) {
     setStuckModalShownIds((prev) => new Set(prev).add(id));
   }, []);
 
-  const handleSelectAnswer = useCallback(
-    (problemId: string, optionIndex: number) => {
-      if (lockedIds.has(problemId) || phase !== "active") return;
-
-      const problem = problems.find((p) => p.id === problemId);
-      if (!problem) return;
-
-      const isCorrect = optionIndex === problem.correctOption;
-      setAnswers((prev) => new Map(prev).set(problemId, optionIndex));
-
+  const applyAnswer = useCallback(
+    (problemId: string, isCorrect: boolean, correctOption: number) => {
       if (isCorrect) {
         setLockedIds((prev) => new Set(prev).add(problemId));
         setFeedbackMap((prev) =>
-          new Map(prev).set(problemId, { type: "correct", correctOption: problem.correctOption })
+          new Map(prev).set(problemId, { type: "correct", correctOption })
         );
-
-        // Record answer via API
-        answerMutation.mutate({
-          questProblemId: problem.id,
-          questId: quest.id,
-          selectedOption: optionIndex,
-          isCorrect: true,
-          responseTimeMs: Math.round(performance.now() - questionStartTimeRef.current),
-          subtopicId: problem.subtopicId,
-          difficultyLevel: problem.difficultyLevel,
-        }, {
-          onSuccess: (data) => {
-            if (data.xpEarned > 0) {
-              setXpEarned((prev) => prev + data.xpEarned);
-            }
-          },
-        });
 
         // Auto-advance only if NOT in tutor phase (tutor page handles its own navigation)
         const currentPhase = questionPhases.get(problemId) ?? "question";
@@ -144,7 +130,7 @@ export function QuestProvider({ quest, problems, children }: Props) {
         }
       } else {
         setFeedbackMap((prev) =>
-          new Map(prev).set(problemId, { type: "wrong", correctOption: problem.correctOption })
+          new Map(prev).set(problemId, { type: "wrong", correctOption })
         );
 
         // Track wrong count and escalate phase: 1→hint, 2→hint2, 3+→tutor
@@ -158,17 +144,6 @@ export function QuestProvider({ quest, problems, children }: Props) {
           setQuestionPhases((prev) => new Map(prev).set(problemId, "tutor"));
         }
 
-        // Record wrong answer
-        answerMutation.mutate({
-          questProblemId: problem.id,
-          questId: quest.id,
-          selectedOption: optionIndex,
-          isCorrect: false,
-          responseTimeMs: Math.round(performance.now() - questionStartTimeRef.current),
-          subtopicId: problem.subtopicId,
-          difficultyLevel: problem.difficultyLevel,
-        });
-
         setTimeout(() => {
           setFeedbackMap((prev) => {
             const n = new Map(prev);
@@ -178,7 +153,42 @@ export function QuestProvider({ quest, problems, children }: Props) {
         }, 2000);
       }
     },
-    [lockedIds, phase, problems, quest.id, answerMutation, wrongCounts, questionPhases]
+    [problems.length, wrongCounts, questionPhases]
+  );
+
+  // Graded server-side: the payload has no answer key until a question is answered.
+  const handleSelectAnswer = useCallback(
+    (problemId: string, optionIndex: number) => {
+      if (lockedIds.has(problemId) || phase !== "active" || pendingIdsRef.current.has(problemId)) return;
+
+      const problem = problems.find((p) => p.id === problemId);
+      if (!problem) return;
+
+      setAnswers((prev) => new Map(prev).set(problemId, optionIndex));
+      pendingIdsRef.current.add(problemId);
+      answerMutation
+        .mutateAsync({
+          questProblemId: problem.id,
+          questId: quest.id,
+          selectedOption: optionIndex,
+          responseTimeMs: Math.round(performance.now() - questionStartTimeRef.current),
+          subtopicId: problem.subtopicId,
+          difficultyLevel: problem.difficultyLevel,
+        })
+        .then((data) => {
+          if (!data) return;
+          const { isCorrect, xpEarned: earned, overallLevelUp, ...reveal } = data;
+          setRevealed((prev) => new Map(prev).set(problemId, reveal));
+          applyAnswer(problemId, isCorrect, reveal.correctOption);
+          if (isCorrect) {
+            if (earned > 0) setXpEarned((prev) => prev + earned);
+            announceOverallLevelUp(overallLevelUp);
+          }
+        })
+        .catch(() => toast.error("Couldn't check your answer. Please try again."))
+        .finally(() => pendingIdsRef.current.delete(problemId));
+    },
+    [lockedIds, phase, problems, quest.id, answerMutation, applyAnswer]
   );
 
   const handleComplete = useCallback(() => {

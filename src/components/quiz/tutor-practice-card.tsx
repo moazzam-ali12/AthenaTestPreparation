@@ -1,29 +1,40 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useCallback, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Sparkles } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { PracticeGradientCard } from "@/components/quiz/practice-gradient-card";
-import type { Problem } from "@/components/quiz/types";
+import {
+  PracticeGradientCard,
+  type PracticeProblem,
+  type ServerGrade,
+} from "@/components/quiz/practice-gradient-card";
 
 type TutorPracticeCardProps = {
   practiceProblemsUrl?: string;
   difficulty?: string;
+  /** Practice index to start at (resuming after the refresher card). */
+  startIndex?: number;
   onComplete: () => void;
-  onNeedsMicroLesson: () => void;
-  onCurrentProblemChange?: (problem: Problem | null) => void;
+  /**
+   * A practice problem was missed twice (answer revealed). `nextIndex` is the
+   * next unanswered practice problem, or null if this was the last one.
+   */
+  onNeedsMicroLesson: (nextIndex: number | null) => void;
+  onCurrentProblemChange?: (problem: PracticeProblem | null) => void;
 };
 
 export function TutorPracticeCard({
   practiceProblemsUrl,
   difficulty,
+  startIndex = 0,
   onComplete,
   onNeedsMicroLesson,
   onCurrentProblemChange,
 }: TutorPracticeCardProps) {
-  const [problemIndex, setProblemIndex] = useState(0);
+  // Fixed per mount: the tutor page remounts with a new startIndex to resume.
+  const problemIndex = startIndex;
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["tutor-practice-card", practiceProblemsUrl, difficulty],
@@ -32,7 +43,7 @@ export function TutorPracticeCard({
       const url = `${practiceProblemsUrl}${difficulty ? `?difficulty=${encodeURIComponent(difficulty)}` : ""}`;
       return fetch(url).then((r) => {
         if (!r.ok) throw new Error("Failed to load practice problems");
-        return r.json() as Promise<{ problems: Problem[] }>;
+        return r.json() as Promise<{ problems: PracticeProblem[] }>;
       });
     },
     enabled: !!practiceProblemsUrl,
@@ -51,12 +62,24 @@ export function TutorPracticeCard({
   }, [onComplete]);
 
   const handleExhausted = useCallback(() => {
-    if (problemIndex === 0 && problems.length > 1) {
-      setProblemIndex(1);
-    } else {
-      onNeedsMicroLesson();
-    }
+    onNeedsMicroLesson(problemIndex + 1 < problems.length ? problemIndex + 1 : null);
   }, [problemIndex, problems.length, onNeedsMicroLesson]);
+
+  // Server-graded practice: POST the answer to the same endpoint that served it.
+  const gradeUrl = practiceProblemsUrl?.split("?")[0];
+  const gradeAnswer = useCallback(
+    async (problemId: string, selectedOption: number, reveal: boolean): Promise<ServerGrade> => {
+      if (!gradeUrl) throw new Error("No grader");
+      const r = await fetch(gradeUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ problemId, selectedOption, reveal }),
+      });
+      if (!r.ok) throw new Error("Failed to check answer");
+      return r.json();
+    },
+    [gradeUrl]
+  );
 
   return (
     <motion.div
@@ -112,6 +135,7 @@ export function TutorPracticeCard({
             questionNumber={problemIndex + 1}
             onCorrect={handleCorrect}
             onExhausted={handleExhausted}
+            gradeAnswer={gradeAnswer}
           />
         ) : null}
       </div>

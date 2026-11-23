@@ -1,6 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import type { AccessTier } from "@/lib/trial";
 
 type UserData = {
   user: {
@@ -15,6 +16,18 @@ type UserData = {
     subscriptionStatus: string;
     planType: string;
     subscriptionEndDate: string | null;
+    paymentFailedAt: string | null;
+    billingPlan: string | null;
+    trialStartedAt: string | null;
+    trialEndsAt: string | null;
+  };
+  access: {
+    tier: AccessTier;
+    trialEndsAt: string | null;
+    daysLeft: number;
+    /** Set while a failed payment is in its grace period (tier stays 'pro'). */
+    graceEndsAt: string | null;
+    graceDaysLeft: number;
   };
   onboarding: {
     currentStep: "plan" | "quiz" | "schedule" | "completed";

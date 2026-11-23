@@ -8,6 +8,7 @@ import { MicroLesson } from "@/components/learning/micro-lesson";
 import type { Problem } from "@/components/quiz/types";
 import { WhiteboardSkeleton } from "@/components/whiteboard/whiteboard-skeleton";
 import { GenerationProgress } from "@/components/lessons/generation-progress";
+import { isCpaSubject } from "@/types/cpa-exam";
 
 const HARDCODED_PROBLEMS: Problem[] = [
   {
@@ -172,7 +173,10 @@ export default function MicroLessonPage() {
       metadata={metadata}
       existingLesson={existingLesson}
       subtopicApiPath={`/api/learning/${topicSlug}/${subtopicSlug}/micro-lesson`}
-      practiceMode={{ subject: "math" }}
+      practiceMode={{
+        subject: isCpaSubject(topic.subject) ? topic.subject : undefined,
+        subtopicId: subtopic.id,
+      }}
       practiceProblems={subtopicSlug === "linear-equations-two-variables" ? HARDCODED_PROBLEMS : undefined}
       onClose={() => router.push(`/learning/${topicSlug}/${subtopicSlug}`)}
       tracking={storedLesson?.id ? { microLessonId: storedLesson.id, subtopicId: storedLesson.subtopicId ?? data.subtopic.id } : undefined}

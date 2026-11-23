@@ -3,10 +3,13 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Sparkles } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAthenaConversation } from "@/hooks/use-athena-conversation";
 import type { QuizContext } from "@/hooks/use-athena-conversation";
 import { useWhiteboardPlayer } from "@/hooks/use-whiteboard-player";
 import { TutorModeOverlay } from "@/components/quiz/tutor-mode-overlay";
+import { TutorModeControls } from "@/components/quiz/tutor-mode-controls";
+import { resolveTutorMode, type TutorMode } from "@/lib/tutor-modes";
 import type { Problem } from "@/components/quiz/types";
 import type { FeedbackState } from "@/components/quiz/answer-panel";
 import type { SelectedElement } from "@/types/whiteboard";
@@ -31,9 +34,11 @@ type QuizTutorFabProps = {
   practiceContent?: React.ReactNode;
   /** When in practice phase, override the quiz context so the AI knows about the practice problem */
   practiceContextOverride?: QuizContext;
+  /** Sends `text` to the tutor once per new `id` (e.g. an "Ask the AI tutor" button). */
+  askRequest?: { id: number; text: string };
 };
 
-export function QuizTutorFab({ topicName, subtopicName, currentProblem, questionNumber, studentAnswer, feedbackState, onSelectAnswer, onOpenChange, autoOpen, autoMessage, quizStreamUrl, defaultOpen = false, onClose, practiceContent, practiceContextOverride }: QuizTutorFabProps) {
+export function QuizTutorFab({ topicName, subtopicName, currentProblem, questionNumber, studentAnswer, feedbackState, onSelectAnswer, onOpenChange, autoOpen, autoMessage, quizStreamUrl, defaultOpen = false, onClose, practiceContent, practiceContextOverride, askRequest }: QuizTutorFabProps) {
   const [open, setOpenState] = useState(defaultOpen);
   const hasAutoTriggered = useRef(false);
   const practiceResetRef = useRef(false);
@@ -47,6 +52,37 @@ export function QuizTutorFab({ topicName, subtopicName, currentProblem, question
   const [selections, setSelections] = useState<SelectedElement[]>([]);
   const [focusTrigger, setFocusTrigger] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Tutor modes (Hint / Guided / Full explanation) — only the main quiz tutor route
+  // supports them; a custom stream URL (My Learning) keeps its single behaviour.
+  const modesEnabled = !quizStreamUrl;
+  const queryClient = useQueryClient();
+  const { data: tutorPrefs } = useQuery({
+    queryKey: ["tutor-preferences"],
+    queryFn: () =>
+      fetch("/api/tutor-preferences").then((r) => {
+        if (!r.ok) throw new Error("Failed to load tutor preferences");
+        return r.json() as Promise<{ tutorMode: TutorMode | null }>;
+      }),
+    staleTime: 5 * 60_000,
+    enabled: modesEnabled,
+  });
+  const { mutate: saveTutorMode } = useMutation({
+    mutationFn: (tutorMode: TutorMode) =>
+      fetch("/api/tutor-preferences", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tutorMode }),
+      }).then((r) => {
+        if (!r.ok) throw new Error("Failed to save tutor mode");
+      }),
+    onMutate: (tutorMode) =>
+      queryClient.setQueryData(["tutor-preferences"], (prev: object | undefined) => ({ ...prev, tutorMode })),
+  });
+  const answered = typeof studentAnswer === "number";
+  const tutorMode = resolveTutorMode(tutorPrefs?.tutorMode, answered && !practiceContextOverride);
+  const answeredWrong =
+    answered && !practiceContextOverride && currentProblem.correctOption >= 0 && studentAnswer !== currentProblem.correctOption;
 
   const {
     messages,
@@ -62,11 +98,13 @@ export function QuizTutorFab({ topicName, subtopicName, currentProblem, question
     stopRecording,
     toggleMode,
     reset,
+    practiceLinks,
   } = useAthenaConversation({
     lessonTitle: subtopicName,
     lessonContent: "",
     variant: "quiz",
     quizStreamUrl,
+    tutorMode: modesEnabled ? tutorMode : undefined,
     quizContext: practiceContextOverride ?? {
       topic: topicName,
       subtopic: subtopicName,
@@ -74,7 +112,10 @@ export function QuizTutorFab({ topicName, subtopicName, currentProblem, question
       options: currentProblem.options,
       hint: currentProblem.hint,
       solutionSteps: currentProblem.solutionSteps,
-      correctOption: currentProblem.correctOption,
+      // Not answered yet → the key isn't in the browser; the route resolves it
+      // (and prefers its own key whenever it has one for this problem id).
+      ...(currentProblem.correctOption >= 0 ? { correctOption: currentProblem.correctOption } : {}),
+      problemId: currentProblem.id,
       studentAnswer,
     },
   });
@@ -100,6 +141,15 @@ export function QuizTutorFab({ topicName, subtopicName, currentProblem, question
       sendMessage(autoMessage);
     }
   }, [autoOpen, autoMessage, setOpen, sendMessage]);
+
+  // External "ask" trigger — goes through the normal tutor stream (and its trial cap).
+  const lastAskIdRef = useRef(0);
+  useEffect(() => {
+    if (!askRequest || askRequest.id === lastAskIdRef.current) return;
+    lastAskIdRef.current = askRequest.id;
+    setOpen(true);
+    sendMessage(askRequest.text);
+  }, [askRequest, setOpen, sendMessage]);
 
   // Clear conversation + whiteboard when entering practice phase
   useEffect(() => {
@@ -246,6 +296,21 @@ export function QuizTutorFab({ topicName, subtopicName, currentProblem, question
             onElementsSelect={handleElementsSelect}
             focusTrigger={focusTrigger}
             practiceContent={practiceContent}
+            tutorControls={
+              modesEnabled ? (
+                <TutorModeControls
+                  mode={tutorMode}
+                  onModeChange={(m) => saveTutorMode(m)}
+                  onWhyWrong={
+                    answeredWrong
+                      ? () => sendMessage("Why was my answer wrong?", { mode: "why_wrong" })
+                      : undefined
+                  }
+                  practiceLinks={practiceLinks}
+                  disabled={isProcessing}
+                />
+              ) : undefined
+            }
             onClose={() => setOpen(false)}
           />
         )}

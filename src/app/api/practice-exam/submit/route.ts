@@ -13,7 +13,9 @@ import {
   initializeAllSkills,
 } from "@/lib/db/queries/subsection-skills";
 import { updateSkillAfterAnswer } from "@/lib/adaptive/engine";
+import { checkOverallLevelUp } from "@/lib/adaptive/overall-level";
 import { computeSectionExamScore } from "@/lib/cpa-scoring";
+import { applySectionProgress } from "@/lib/practice-exam";
 import { NextResponse } from "next/server";
 import type { SectionCategory } from "@/types/adaptive";
 import type { CpaExamSubmitResponse } from "@/types/cpa-exam";
@@ -61,9 +63,13 @@ export async function POST(req: Request) {
     totalTimeSeconds: totalTimeSeconds ?? 0,
   });
 
-  await upsertSectionProgressAfterAttempt(user.id, attempt.section, scaledScore, passed);
+  // Sample tests never touch pass status / full-exam stats; skill + XP below still apply.
+  await applySectionProgress(attempt, scaledScore, passed, (score, didPass) =>
+    upsertSectionProgressAfterAttempt(user.id, attempt.section, score, didPass)
+  );
 
   // Update subsection skills
+  let overallLevelUp: number | null = null;
   try {
     const problems = await getTestProblems(attempt.testId);
     const problemMap = new Map(problems.map((p) => [p.problemId, p]));
@@ -90,6 +96,7 @@ export async function POST(req: Request) {
     const sectionCategory: SectionCategory = attempt.section;
 
     let totalXpEarned = 0;
+    let anyLevelUp = false;
 
     for (const [subtopicId, subtopicAnswers] of bySubtopic) {
       let skill = await getSubsectionSkill(user.id, subtopicId);
@@ -110,6 +117,8 @@ export async function POST(req: Request) {
           currentSkill = { ...currentSkill, ...mutations };
         }
 
+        if (currentSkill.level > skill.level) anyLevelUp = true;
+
         await upsertSubsectionSkill(user.id, subtopicId, sectionCategory, {
           level: currentSkill.level,
           xp: currentSkill.xp,
@@ -128,6 +137,10 @@ export async function POST(req: Request) {
         totalXp: (user.totalXp ?? 0) + totalXpEarned,
       });
     }
+
+    if (anyLevelUp) {
+      overallLevelUp = await checkOverallLevelUp(user.id);
+    }
   } catch (e) {
     console.error("Failed to update subsection skills:", e);
   }
@@ -136,7 +149,9 @@ export async function POST(req: Request) {
     section: attempt.section,
     rawScore: rawCorrect,
     scaledScore,
-    passed,
+    passed: attempt.isSample ? false : passed,
+    isSample: attempt.isSample,
+    overallLevelUp,
   };
 
   return NextResponse.json(response);
